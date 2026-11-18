@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 971 · Cleanup: removed the Payment Calendar view from the Finance module, and removed the 'For Bank Payment' section from the admin Approvals view.";
+const BUILD = "Live build 972 · Dashboard: the Open Pipeline Value card is now clickable — opens a ranked list of every open lead (biggest value first) showing the client, the sales manager, and the current status, so you can see where to push.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -25238,6 +25238,7 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
   // Manual monthly sales (pre-OS months you typed into the Annual Sales panel),
   // blended with OS sales orders so the Dashboard year figure matches that panel.
   const [manualYear,setManualYear]=useState({});
+  const [showPipeline,setShowPipeline]=useState(false);
   useEffect(()=>{ (async()=>{ try{ const yr=new Date().getFullYear(); const { data }=await sb.from('annual_sales_manual').select('*').like('ym',`${yr}-%`); const m={}; (data||[]).forEach(r=>{ m[r.ym]=Number(r.amount)||0; }); setManualYear(m); }catch(_){ setManualYear({}); } })(); },[]);
   const mine=leads.filter(l=>l.manager_id===profile.id);
   const open=leads.filter(l=>!CLOSED_STAGES.includes(l.stage));
@@ -25267,7 +25268,7 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
   won.forEach(l=>{ if(!l.won_at) return; const d=new Date(l.won_at+'T00:00:00'); const slot=months.find(x=>x.m===d.getMonth()&&x.y===d.getFullYear()); if(slot){ slot.total+=Number(l.value)||0; slot.count++; } });
   const maxM=Math.max(1,...months.map(m=>m.total));
   const tiles=[
-    { label:'Open pipeline value', value:peso(openVal), sub:`${open.length} active leads` },
+    { label:'Open pipeline value', value:peso(openVal), sub:`${open.length} active leads`, onClick:()=>setShowPipeline(true) },
     { label:'Won this month', value:peso(wonMonthVal), sub:`${wonThisMonth.length} deal${wonThisMonth.length===1?'':'s'} · ${won.length} won all-time` },
     { label:`Sales YTD (${_yr})`, value:peso(salesYtd), sub:`OS orders${monthsManual>0?` + ${monthsManual} manual month${monthsManual===1?'':'s'}`:''}` },
     { label:'My leads', value:mine.length, sub:`${mine.filter(l=>!CLOSED_STAGES.includes(l.stage)).length} still open` },
@@ -25308,8 +25309,50 @@ function Dashboard({ profile, profiles, leads, clients, prodJobs, soPayments, sa
         </div>
       )}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">{tiles.map((t,i)=>(
-        <div key={i} className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase tracking-wide text-slate-400">{t.label}</div><div className="text-2xl font-bold text-slate-900 mt-1">{t.value}</div><div className="text-xs text-slate-500 mt-0.5">{t.sub}</div></div>
+        t.onClick ? (
+          <button key={i} onClick={t.onClick} className="bg-white border rounded-xl p-4 text-left hover:border-indigo-400 hover:shadow-sm transition group"><div className="text-[11px] uppercase tracking-wide text-slate-400 flex items-center gap-1">{t.label} <span className="text-indigo-400 opacity-0 group-hover:opacity-100 transition">→</span></div><div className="text-2xl font-bold text-slate-900 mt-1">{t.value}</div><div className="text-xs text-slate-500 mt-0.5">{t.sub} · <span className="text-indigo-500 font-medium">view</span></div></button>
+        ) : (
+          <div key={i} className="bg-white border rounded-xl p-4"><div className="text-[11px] uppercase tracking-wide text-slate-400">{t.label}</div><div className="text-2xl font-bold text-slate-900 mt-1">{t.value}</div><div className="text-xs text-slate-500 mt-0.5">{t.sub}</div></div>
+        )
       ))}</div>
+
+      {showPipeline && (()=>{
+        const stageMeta=k=>STAGES.find(s=>s.key===k)||{label:k,color:'bg-slate-100 text-slate-600'};
+        const rows=open.map(l=>({
+          l,
+          company:(clients.find(c=>c.id===l.client_id)?.company)||l.client_name||'—',
+          manager:((profiles||[]).find(p=>p.id===l.manager_id)?.name)||'Unassigned',
+          val:Number(l.value)||0,
+        })).sort((a,b)=>b.val-a.val);
+        const grand=rows.reduce((s,r)=>s+r.val,0);
+        return (
+        <Modal title="💰 Open pipeline — biggest deals first" onClose={()=>setShowPipeline(false)} wide>
+          <p className="text-xs text-slate-500 mb-2">{rows.length} active lead{rows.length===1?'':'s'} · {peso(grand)} total. Push the top of this list to move the needle.</p>
+          <div className="max-h-[65vh] overflow-auto border rounded-lg mt-2">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-[11px] uppercase text-slate-500 sticky top-0"><tr>
+                <th className="text-left px-3 py-2 w-8">#</th>
+                <th className="text-left px-3 py-2">Client / Deal</th>
+                <th className="text-left px-3 py-2">Sales Manager</th>
+                <th className="text-left px-3 py-2">Status</th>
+                <th className="text-right px-3 py-2">Open Value</th>
+              </tr></thead>
+              <tbody>{rows.map((r,idx)=>{ const sm=stageMeta(r.l.stage); return (
+                <tr key={r.l.id} className="border-t hover:bg-indigo-50/40">
+                  <td className="px-3 py-2 text-slate-400 text-xs">{idx+1}</td>
+                  <td className="px-3 py-2"><div className="font-medium text-slate-800">{r.company}</div>{r.l.title && <div className="text-xs text-slate-500">{r.l.title}</div>}</td>
+                  <td className="px-3 py-2 text-slate-600">{r.manager}</td>
+                  <td className="px-3 py-2"><span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${sm.color}`}>{sm.label}</span></td>
+                  <td className="px-3 py-2 text-right font-bold text-slate-900">{peso(r.val)}</td>
+                </tr>
+              ); })}
+              {rows.length===0 && <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-400 text-sm">No open leads.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Modal>
+        );
+      })()}
       <div className="grid md:grid-cols-2 gap-4">
         <div className="bg-white border rounded-xl p-4"><div className="font-semibold text-slate-900 mb-2">Pipeline by stage</div>{STAGES.filter(s=>!CLOSED_STAGES.includes(s.key)).map(s=>{ const c=open.filter(l=>l.stage===s.key); const v=c.reduce((a,l)=>a+(Number(l.value)||0),0); return (<div key={s.key} className="flex items-center justify-between py-1.5 border-b last:border-0 text-sm"><span className="text-slate-600">{s.label}</span><span className="text-slate-500">{c.length} · {peso(v)}</span></div>); })}</div>
         <div className="bg-white border rounded-xl p-4"><div className="font-semibold text-slate-900 mb-2">Top clients by value</div>{clients.map(c=>({ c, v:leads.filter(l=>l.client_id===c.id&&SOLD_STAGES.includes(l.stage)).reduce((a,l)=>a+(Number(l.value)||0),0) })).filter(x=>x.v>0).sort((a,b)=>b.v-a.v).slice(0,6).map(({c,v})=>(<div key={c.id} className="flex items-center justify-between py-1.5 border-b last:border-0 text-sm"><span className="text-slate-600">{c.company}</span><span className="font-medium text-slate-800">{peso(v)}</span></div>))}{clients.every(c=>leads.filter(l=>l.client_id===c.id&&SOLD_STAGES.includes(l.stage)).length===0) && <div className="text-xs text-slate-400">No won deals yet.</div>}</div>
