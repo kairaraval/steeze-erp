@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 980 · Pipeline: only the Delivered & Paid and Closed Lost columns are collapsible (and start collapsed) so finished/lost deals stay tucked away; every other stage stays fully expanded.";
+const BUILD = "Live build 981 · Comments: a new Table button in the note composer (leads, jobs, anywhere comments appear) lets you build a quick grid for size breakdowns or pricing. It posts as a real, readable table in the activity feed; add or remove rows and columns before inserting.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -474,14 +474,80 @@ function parseMentionsDetail(text, profiles){
   }
   return { matched, unmatched };
 }
-function renderCommentText(text, profiles){
-  const parts=[]; const re=/(@[\p{L}\p{N}._-]+)/gu; let last=0,m,i=0;
-  while((m=re.exec(text||''))){ if(m.index>last) parts.push(text.slice(last,m.index));
-    const tag=m[0].slice(1).toLowerCase(); const p=profiles.find(pp => profileHandle(pp) === tag);
-    if(p) parts.push(<span key={i++} className="bg-indigo-100 text-indigo-700 rounded px-1 font-medium">{m[0]}</span>); else parts.push(m[0]);
+// Highlight @mentions inside a plain run of text.
+function renderInlineMentions(text, profiles, keyBase){
+  const parts=[]; const re=/(@[\p{L}\p{N}._-]+)/gu; let last=0,m,i=0; const s=text||'';
+  while((m=re.exec(s))){ if(m.index>last) parts.push(s.slice(last,m.index));
+    const tag=m[0].slice(1).toLowerCase(); const p=(profiles||[]).find(pp => profileHandle(pp) === tag);
+    if(p) parts.push(<span key={keyBase+'m'+(i++)} className="bg-indigo-100 text-indigo-700 rounded px-1 font-medium">{m[0]}</span>); else parts.push(m[0]);
     last=re.lastIndex; }
-  if(last<(text||'').length) parts.push(text.slice(last));
+  if(last<s.length) parts.push(s.slice(last));
   return parts;
+}
+function _isTableLine(ln){ const t=(ln||'').trim(); if(!t.includes('|')) return false; return t.replace(/^\|/,'').replace(/\|$/,'').split('|').length>=2; }
+function _isSepRow(ln){ const t=(ln||'').trim().replace(/^\|/,'').replace(/\|$/,''); return t.split('|').every(c=>/^\s*:?-{2,}:?\s*$/.test(c)); }
+// Render a comment's text, turning any pipe-table block (2+ lines of "| a | b |")
+// into a real table (size breakdowns / pricing), and highlighting @mentions.
+function renderCommentText(text, profiles){
+  const lines=String(text||'').split('\n'); const out=[]; let i=0, blk=0;
+  const startsTable=(k)=> _isTableLine(lines[k]) && k+1<lines.length && _isTableLine(lines[k+1]);
+  while(i<lines.length){
+    if(startsTable(i)){
+      const tbl=[]; while(i<lines.length && _isTableLine(lines[i])){ tbl.push(lines[i]); i++; }
+      const rows=tbl.filter(ln=>!_isSepRow(ln)).map(ln=> ln.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim()));
+      if(rows.length){ const header=rows[0], body=rows.slice(1); const b=blk++;
+        out.push(
+          <div key={'t'+b} className="my-1.5 overflow-x-auto">
+            <table className="text-xs border-collapse">
+              <thead><tr>{header.map((c,ci)=><th key={ci} className="border border-slate-300 bg-slate-100 px-2 py-1 text-left font-semibold whitespace-nowrap">{renderInlineMentions(c,profiles,'h'+b+ci)}</th>)}</tr></thead>
+              <tbody>{body.map((r,ri)=><tr key={ri}>{header.map((_,ci)=><td key={ci} className="border border-slate-300 px-2 py-1 align-top">{renderInlineMentions(r[ci]||'',profiles,'c'+b+ri+ci)}</td>)}</tr>)}</tbody>
+            </table>
+          </div>
+        );
+      }
+    } else {
+      const txt=[]; while(i<lines.length && !startsTable(i)){ txt.push(lines[i]); i++; }
+      out.push(<span key={'s'+(blk++)}>{renderInlineMentions(txt.join('\n'),profiles,'s'+blk)}</span>);
+    }
+  }
+  return out;
+}
+// Serialize a 2D grid to a markdown pipe-table (first row = header).
+function gridToPipe(grid){
+  if(!grid||!grid.length) return '';
+  const esc=c=>String(c==null?'':c).replace(/\|/g,'/').replace(/\n/g,' ').trim();
+  const cols=grid[0].length;
+  const line=r=>'| '+r.map(esc).join(' | ')+' |';
+  const sep='| '+Array(cols).fill('---').join(' | ')+' |';
+  return [line(grid[0]), sep, ...grid.slice(1).map(line)].join('\n');
+}
+function TableInsertModal({ onClose, onInsert }){
+  const [grid,setGrid]=useState([['Size','Qty',''],['','',''],['','','']]);
+  const cols=grid[0]?.length||0;
+  const setCell=(r,c,v)=>setGrid(g=>g.map((row,ri)=>ri===r?row.map((cell,ci)=>ci===c?v:cell):row));
+  const addRow=()=>setGrid(g=>[...g, Array(cols).fill('')]);
+  const addCol=()=>setGrid(g=>g.map(row=>[...row,'']));
+  const rmRow=()=>setGrid(g=>g.length>1?g.slice(0,-1):g);
+  const rmCol=()=>setGrid(g=>(g[0]?.length||0)>1?g.map(row=>row.slice(0,-1)):g);
+  return (
+    <Modal title="📊 Insert a table" onClose={onClose} wide>
+      <p className="text-xs text-slate-500 mb-2">Fill in the grid — the first row is the header. Handy for size breakdowns or pricing.</p>
+      <div className="overflow-x-auto"><table className="border-collapse mb-3"><tbody>
+        {grid.map((row,ri)=>(<tr key={ri}>{row.map((cell,ci)=>(
+          <td key={ci} className="border border-slate-300 p-0"><input value={cell} onChange={e=>setCell(ri,ci,e.target.value)} placeholder={ri===0?'Header':''} className={`w-28 px-2 py-1 text-sm outline-none focus:bg-indigo-50 ${ri===0?'font-semibold bg-slate-50':''}`} /></td>
+        ))}</tr>))}
+      </tbody></table></div>
+      <div className="flex items-center gap-2 flex-wrap text-xs">
+        <button onClick={addRow} className="px-2 py-1 rounded border hover:bg-slate-50">+ Row</button>
+        <button onClick={rmRow} className="px-2 py-1 rounded border hover:bg-slate-50">− Row</button>
+        <button onClick={addCol} className="px-2 py-1 rounded border hover:bg-slate-50">+ Column</button>
+        <button onClick={rmCol} className="px-2 py-1 rounded border hover:bg-slate-50">− Column</button>
+        <div className="flex-1"></div>
+        <button onClick={onClose} className="px-3 py-1.5 rounded bg-white border font-semibold hover:bg-slate-50">Cancel</button>
+        <button onClick={()=>{ onInsert(gridToPipe(grid)); onClose(); }} className="px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Insert table</button>
+      </div>
+    </Modal>
+  );
 }
 
 // Insert a bank transaction, but guard against accidental double-submits: if an
@@ -1117,6 +1183,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
   const [text,setText]=useState(()=>{ try{ return localStorage.getItem(draftKey)||''; }catch(_){ return ''; } });
   useEffect(()=>{ try{ if(text && text.trim()) localStorage.setItem(draftKey, text); else localStorage.removeItem(draftKey); }catch(_){} },[text, draftKey]);
   const [pending,setPending]=useState([]); // unposted attachments for the next comment
+  const [tableOpen,setTableOpen]=useState(false);
   const [reading,setReading]=useState(false); const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   // Inline edit state — one comment at a time.
   const [editId,setEditId]=useState(null);
@@ -1289,6 +1356,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'…':'Attach (multi)'}<input type="file" multiple accept="image/*,.pdf,application/pdf,.xlsx,.xls,.csv,.doc,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={pickFiles} disabled={reading} /></label>
             <button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button>
+            <button onClick={()=>setTableOpen(true)} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">📊 Table</button>
             <span className="text-[10px] text-slate-400">or paste · ⌘V</span>
             <span className="text-[11px] text-slate-500">{mentionPreview?'Will notify: '+mentionPreview:'Tag with @firstname'}</span>
             {mentionUnmatched && <span className="text-[11px] text-rose-600 font-semibold" title="No teammate matches this @tag. They won't be notified.">⚠ no match: {mentionUnmatched}</span>}
@@ -1296,6 +1364,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
           <button onClick={post} disabled={busy||(!text.trim()&&pending.length===0)} className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Posting…':'Post comment'}</button>
         </div>
       </div>
+      {tableOpen && <TableInsertModal onClose={()=>setTableOpen(false)} onInsert={(pipe)=>{ if(!pipe) return; setText(t=> (t && t.trim() ? t.replace(/\s*$/,'')+'\n\n' : '') + pipe + '\n'); }} />}
       {err && <div className="text-xs text-rose-600">{err}</div>}
       <div className={`space-y-2 ${embedded?'flex-1 overflow-y-auto':'max-h-96 overflow-y-auto'}`}>
         {rows===null && <div className="text-center text-sm text-slate-400 py-4">Loading…</div>}
