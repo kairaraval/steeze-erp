@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 978 · Delivered & Paid automation fix: moving a lead to 'Delivered - For Payment' now auto-jumps to 'Delivered & Paid' when its Sales Order is already fully paid (covers the pay-first-then-deliver flow). Works from both the stage dropdown and pipeline drag; pay-after-delivery already worked.";
+const BUILD = "Live build 979 · Tidier pipeline: the Closed Won and Delivered & Paid columns are now collapsible on the board (and start collapsed) so finished projects don't clutter the pipeline. Click a slim column to expand it, or the ▾/▸ to toggle any stage. Collapsed columns still accept drag-and-drop.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -17115,7 +17115,9 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
   async function markTodoDone(lead, id){ const next=(Array.isArray(lead.checklist)?lead.checklist:[]).map(c=>c.id===id?{...c, done:true, done_at:new Date().toISOString(), done_by:profile.id}:c); const { error }=await sb.from('leads').update({ checklist: next }).eq('id', lead.id); if(error){ alert(error.message); return; } reload && reload(); }
   const [layout,setLayout]=useState(()=>{ try{ return localStorage.getItem('pipelineLayout')||'board'; }catch(e){ return 'board'; } });
   function changeLayout(v){ setLayout(v); try{ localStorage.setItem('pipelineLayout',v); }catch(e){} }
-  const [collapsed,setCollapsed]=useState({}); // stage.key -> true if collapsed
+  // stage.key -> true if collapsed. Done stages (Closed Won + Delivered & Paid)
+  // start collapsed so the board isn't overwhelmed by finished projects.
+  const [collapsed,setCollapsed]=useState({ won:true, delivered_paid:true });
   function toggleCollapsed(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
   // Kanban drag-and-drop state for the Board layout. draggedLeadId fades the
   // grabbed card; dragOverStage highlights the drop column.
@@ -17302,6 +17304,24 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
           if(!canEditLead){ alert("You can only move leads that you own."); return; }
           move(lead, st.key);
         };
+        const stColColor = st.key==='qualified'?'text-blue-700':st.key==='proposal'?'text-indigo-700':st.key==='negotiation'?'text-amber-700':st.key==='sampling'?'text-purple-700':st.key==='won'?'text-emerald-700':st.key==='delivered_pending'?'text-amber-700':st.key==='delivered_paid'?'text-emerald-700':st.key==='lost'?'text-rose-700':'text-slate-700';
+        const colIsCollapsed=!!collapsed[st.key];
+        if(colIsCollapsed){
+          // Collapsed: a slim vertical strip. Still a drop target so you can
+          // drag a lead onto a tucked-away "done" column. Click to expand.
+          return (
+          <div key={st.key}
+               className={`flex-shrink-0 w-12 h-full transition ${isDragTarget?'ring-2 ring-indigo-300 rounded-xl':''}`}
+               onDragOver={onColumnDragOver} onDragLeave={onColumnDragLeave} onDrop={onColumnDrop}>
+            <button onClick={()=>toggleCollapsed(st.key)} title={`Expand ${st.label}`}
+                    className={`w-full h-full rounded-xl border bg-white hover:bg-slate-50 flex flex-col items-center py-3 gap-2 ${isDragTarget?'bg-indigo-50/80':''}`}>
+              <span className="text-slate-400 text-xs">▸</span>
+              <span className={`text-[11px] font-bold ${stColColor} bg-slate-100 rounded-full min-w-[22px] h-[22px] px-1 flex items-center justify-center`}>{col.length}</span>
+              <span className={`text-xs font-bold tracking-wide mt-1 ${stColColor}`} style={{writingMode:'vertical-rl'}}>{st.label}</span>
+            </button>
+          </div>
+          );
+        }
         return (
         <div key={st.key}
              className={`flex-shrink-0 w-72 flex flex-col h-full transition ${isDragTarget?'ring-2 ring-indigo-300 rounded-xl':''}`}
@@ -17311,8 +17331,11 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
           {/* Fixed-position header at top of column (no sticky needed — column
               body scrolls independently below) */}
           <div className="shrink-0 rounded-t-xl px-3 py-2.5 bg-white border border-b-0 flex items-center justify-between">
-            <span className={`text-sm font-bold ${st.key==='qualified'?'text-blue-700':st.key==='proposal'?'text-indigo-700':st.key==='negotiation'?'text-amber-700':st.key==='sampling'?'text-purple-700':st.key==='won'?'text-emerald-700':st.key==='lost'?'text-rose-700':'text-slate-700'}`}>{st.label}</span>
-            <span className="text-xs text-slate-500">{col.length} · {peso(colTotal)}</span>
+            <span className={`text-sm font-bold ${stColColor}`}>{st.label}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">{col.length} · {peso(colTotal)}</span>
+              <button onClick={()=>toggleCollapsed(st.key)} title={`Collapse ${st.label}`} className="text-slate-400 hover:text-slate-700 text-xs leading-none">▾</button>
+            </div>
           </div>
           {/* Scrollable column body */}
           <div className={`flex-1 overflow-y-auto rounded-b-xl border border-t-0 p-2 space-y-2 min-h-[140px] transition ${isDragTarget?'bg-indigo-50/80':'bg-slate-100/70'}`}>{col.map(l=>{ const mgr=profiles.find(p=>p.id===l.manager_id); const canEdit=isAdmin||isAssistant||l.manager_id===profile.id;
