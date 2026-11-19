@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 976 · Performance: the app no longer downloads thousands of activity rows on every load — comment counts (leads, jobs, sales orders), the 'my leads' signal, and the item-name catalog are now computed on the server. Each login ships ~10,000 fewer rows, so the OS stays fast under heavy simultaneous use.";
+const BUILD = "Live build 977 · Order changes cascade: when the sales owner or an admin edits the quantity/items on a Closed Won or Sampling deal, a confirmation gate appears — and on confirm the change flows to the Sales Order (incl. amount + balance due), the production job, and every department board (sewing, sorting/packing, printing, embroidery, knitting). Logged work is kept; you're warned if a board already produced more or an SO is overpaid. No more fixing the numbers by hand everywhere.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1601,6 +1601,37 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
       // Detect transition INTO a sold/won stage so we can auto-create the PR.
       const wasSold = isEdit && SOLD_STAGES.includes(existing?.stage);
       const willBeSold = SOLD_STAGES.includes(stage);
+      // ── Quantity / items cascade gate ──
+      // Once a deal is Closed Won (or in Sampling) its quantities were copied
+      // into the Sales Order + production + every department board. If someone
+      // now changes the items/quantities, we cascade the change everywhere —
+      // behind a confirmation gate, and only for the sales owner or an admin.
+      const normItems = arr => JSON.stringify((arr||[]).map(it=>({ t:String(it.itemType||'').trim().toLowerCase(), q:Number(it.quantity)||0, p:Number(it.pricePerItem)||0 })));
+      const downstreamStages = ['won','delivered_pending','delivered_paid','sampling'];
+      const isDownstream = downstreamStages.includes(existing?.stage) || downstreamStages.includes(stage);
+      const itemsChanged = isEdit && normItems(existing?.items) !== normItems(finalItems);
+      let runCascade = false;
+      if(isEdit && isDownstream && itemsChanged){
+        const canCascade = profile.role==='admin' || existing?.manager_id===profile.id;
+        if(!canCascade){
+          setBusy(false);
+          setMsg('⚠ This order is already Closed Won / in Sampling. Only the sales owner or an admin can change its quantities — it updates the Sales Order and all production boards. Please ask them to make the change.');
+          return;
+        }
+        const oldQty=(existing?.items||[]).reduce((s,it)=>s+(Number(it.quantity)||0),0);
+        const newQty=(finalItems||[]).reduce((s,it)=>s+(Number(it.quantity)||0),0);
+        const ok = window.confirm(
+          `You're changing a "${stageMeta(existing?.stage||stage).label}" order.\n\n`+
+          `Total quantity: ${oldQty} → ${newQty} pcs.\n\n`+
+          `This will update EVERYTHING downstream to match:\n`+
+          `• the Sales Order (items + amount; balance due recomputed)\n`+
+          `• the production job\n`+
+          `• all department boards (sewing, sorting/packing, printing, embroidery, knitting)\n\n`+
+          `Work already logged by a department is kept. Continue?`
+        );
+        if(!ok){ setBusy(false); return; }
+        runCascade = true;
+      }
       let savedLeadId = null;
       let savedLeadForPR = null;
       if(isEdit){
@@ -1632,6 +1663,20 @@ function LeadForm({ profile, profiles, clients, leads, existing, onClose, onSave
             await sb.from('sales_orders').update({ payment_terms: payload.payment_terms||null }).eq('id', linkedSO.id);
             await sb.from('lead_activity').insert({ lead_id:existing.id, actor_id:profile.id, type:'system', text:`Updated Payment Terms — synced to the linked Sales Order` });
           }
+        }
+        // ── Quantity / items cascade (gated + confirmed above) ──
+        if(runCascade){
+          // Recompute SO money the SAME way the Sales Order was first created
+          // (base = Σ qty×price ex-VAT, VAT = 12% on VAT-flagged lines, plus any
+          // billable companion/pass-through amount) so the SO stays consistent.
+          const soBase = finalItems.reduce((s,it)=> s+(Number(it.quantity)||0)*(Number(it.pricePerItem)||0), 0);
+          const soVat  = finalItems.reduce((s,it)=>{ const sub=(Number(it.quantity)||0)*(Number(it.pricePerItem)||0); return s+(it.withVat?sub*0.12:0); }, 0);
+          const soProc = (hasCompanion && cMeta && cMeta.billable) ? (Number(compAmt)||0) : 0;
+          const money={ subtotal: soBase+soProc, vat: soVat, total: soBase+soVat+soProc };
+          const res = await cascadeOrderChangeFromLead({ id:existing.id, manager_id:payload.manager_id }, finalItems, money);
+          const newQty=(finalItems||[]).reduce((s,it)=>s+(Number(it.quantity)||0),0);
+          await sb.from('lead_activity').insert({ lead_id:existing.id, actor_id:profile.id, type:'system', text:`Changed order quantity/items (now ${newQty} pcs) — cascaded to the Sales Order, production job, and department boards` });
+          if(res && res.warnings && res.warnings.length){ try{ alert('Updated. Please note:\n\n• '+res.warnings.join('\n\n• ')); }catch(_){} }
         }
       } else {
         const {data,error}=await sb.from('leads').insert(payload).select().single(); if(error) throw error;
@@ -34551,6 +34596,27 @@ async function cascadeDueDatesFromLead(lead){
   } catch(e){
     console.warn('Cascade due-dates unexpected error:', e);
   }
+}
+
+// Cascade a quantity / items change from a won or sampling lead down to every
+// place the numbers were copied: the Sales Order (incl. money), the production
+// job, the graphic job, and all department boards (sewing, sorting/packing,
+// printing, embroidery, knitting), plus subcon tasks. Only the TARGET quantity
+// is changed — logged work is never touched — so a department that already
+// produced more keeps its progress; we return warnings so the user reconciles.
+async function cascadeOrderChangeFromLead(lead, finalItems, money){
+  if(!lead || !lead.id) return { warnings:[] };
+  const items = finalItems||[];
+  const qty = items.reduce((s,it)=>s+(Number(it.quantity)||0),0);
+  try {
+    const { data, error } = await sb.rpc('cascade_order_change', {
+      p_lead: lead.id, p_items: items, p_qty: qty,
+      p_subtotal: Number(money.subtotal)||0, p_vat: Number(money.vat)||0, p_total: Number(money.total)||0
+    });
+    if(error){ console.warn('cascade_order_change error:', error); return { warnings:[`Couldn't update every downstream record automatically (${error.message}). Please double-check the Sales Order and production boards.`], qty }; }
+    const warnings = (data && Array.isArray(data.warnings)) ? data.warnings : [];
+    return { warnings, qty };
+  } catch(e){ console.warn('cascadeOrderChangeFromLead error:', e); return { warnings:[], qty }; }
 }
 
 /* ====================== STOCK RESERVATIONS (Layer 2) ====================== */
