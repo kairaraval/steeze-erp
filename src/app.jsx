@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 986 · Employee approvers (two-step): new 'Employee approvers' tab in Payroll Setup to set Approver 1 and Approver 2 per employee. A filed leave/OT now routes to Approver 1; once they approve it passes to Approver 2 for a double-check; employees with no approvers fall back to the HR/Admin pool. Approvers act on items under Profile → My Requests → 'Approvals waiting for you'. Sales managers can now approve their associates' filings.";
+const BUILD = "Live build 987 · Fix: the AGM 'For Approval' sidebar count matched the wrong stage — it was counting department requests still sitting in the Admin Office (status department_request) instead of the ones that actually reached the AGM (agm_review). The badge now matches the AGM's approval page exactly, so the number and the list agree.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -56978,8 +56978,10 @@ function App(){
     + (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_admin').length
     + (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_admin').length
     + tbInitApprovals;
-  // AGM first-level approval queue badge.
-  const agmApprovalsPending = (requests||[]).filter(r=>!r.deleted_at && r.status==='department_request').length
+  // AGM first-level approval queue badge. Must match AGMApprovalsView: department
+  // requests reach the AGM at status 'agm_review' (after Admin Office/Geziel clears
+  // them). 'department_request' is still sitting in the Admin Office queue.
+  const agmApprovalsPending = (requests||[]).filter(r=>!r.deleted_at && r.status==='agm_review').length
     + (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm').length
     + (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_agm').length
     + (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_agm').length
