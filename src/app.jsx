@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 985 · Cash payments can now pick a deposit bank: on every sales-payment screen (log, multi-order, verify, edit), a CASH payment can choose which bank account the cash was/will be deposited to — it then posts to that Cash in Bank. Leave it blank to keep it as Cash on Hand. (Previously cash defaulted into one bank automatically.)";
+const BUILD = "Live build 986 · Employee approvers (two-step): new 'Employee approvers' tab in Payroll Setup to set Approver 1 and Approver 2 per employee. A filed leave/OT now routes to Approver 1; once they approve it passes to Approver 2 for a double-check; employees with no approvers fall back to the HR/Admin pool. Approvers act on items under Profile → My Requests → 'Approvals waiting for you'. Sales managers can now approve their associates' filings.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -26062,6 +26062,35 @@ function EmployeePortal({ profile, tab }){
   const [memos,setMemos]=useState([]);
   const [loading,setLoading]=useState(true);
   const [reqOpen,setReqOpen]=useState(null); // kind for the request modal
+  // Filings routed to ME for approval (I'm Approver 1 or 2 for the employee).
+  const [myApprovals,setMyApprovals]=useState([]);
+  const [apprScheds,setApprScheds]=useState([]);
+  const [apprBusy,setApprBusy]=useState('');
+  async function loadApprovals(){
+    try{
+      const { data:es }=await sb.from('employees').select('*').or(`approver_1_id.eq.${profile.id},approver_2_id.eq.${profile.id}`).is('deleted_at',null);
+      const emps2=es||[]; if(!emps2.length){ setMyApprovals([]); return; }
+      const ids=emps2.map(e=>e.id);
+      const { data:lv }=await sb.from('hr_leaves').select('*').in('employee_id',ids).eq('status','pending');
+      const { data:fl }=await sb.from('attendance_filings').select('*').in('employee_id',ids).is('deleted_at',null).eq('status','pending');
+      try{ const { data:sc }=await sb.from('work_schedules').select('*').is('deleted_at',null); setApprScheds(sc||[]); }catch(_){}
+      const rows=[];
+      (lv||[]).forEach(l=>{ const e=emps2.find(x=>x.id===l.employee_id); if(filingNextApprover(l,e).who===profile.id) rows.push({ src:'leave', rec:l, emp:e }); });
+      (fl||[]).forEach(f=>{ const e=emps2.find(x=>x.id===f.employee_id); if(filingNextApprover(f,e).who===profile.id) rows.push({ src:'filing', rec:f, emp:e }); });
+      setMyApprovals(rows);
+    }catch(_){ setMyApprovals([]); }
+  }
+  async function actApproval(row, ok){
+    setApprBusy(row.rec.id);
+    try{
+      const sched=(apprScheds||[]).find(s=>s.id===row.emp?.schedule_id)||null;
+      if(ok) await approveFilingStep({ src:row.src, rec:row.rec, emp:row.emp, profile, sched });
+      else await rejectFilingStep({ src:row.src, rec:row.rec, emp:row.emp, profile });
+      await loadApprovals();
+    }catch(e){ alert(e.message||String(e)); }
+    setApprBusy('');
+  }
+  useEffect(()=>{ loadApprovals(); },[]);
   const now=new Date();
   const [ym,setYm]=useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`);
   const [openSlip,setOpenSlip]=useState(null);
@@ -26239,6 +26268,30 @@ function EmployeePortal({ profile, tab }){
       <div className="flex items-center justify-end gap-2">
         {QUICK.map(([k,ic,lbl])=><button key={k} onClick={()=>setReqOpen(k)} className="text-xs px-2.5 py-1.5 rounded-lg border bg-white font-semibold hover:bg-slate-50">{ic} {lbl.replace('File ','').replace('Request ','')}</button>)}
       </div>
+      {myApprovals.length>0 && (
+        <div className="bg-white border border-amber-200 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b bg-amber-50 font-bold text-amber-800 flex items-center gap-2">✅ Approvals waiting for you <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-amber-200 text-amber-800">{myApprovals.length}</span></div>
+          <div className="divide-y">{myApprovals.map(row=>{ const rec=row.rec, emp=row.emp;
+            const typeLabel = row.src==='leave' ? 'Leave' : ((FILING_KINDS.find(k=>k.key===rec.kind)||{}).label||rec.kind);
+            const stage = (emp?.approver_2_id && !rec.appr1_at) ? 'Approver 1' : (emp?.approver_2_id ? 'Approver 2' : 'Approver');
+            const details = row.src==='leave'
+              ? `${fmtDate(rec.start_date)}${rec.end_date&&rec.end_date!==rec.start_date?`–${fmtDate(rec.end_date)}`:''} · ${rec.days||'?'}d${rec.reason?` · ${rec.reason}`:''}`
+              : `${fmtDate(rec.filing_date)}${rec.ot_hours?` · ${rec.ot_hours}h OT`:''}${rec.reason?` · ${rec.reason}`:''}`;
+            return (
+              <div key={rec.id} className="px-4 py-2.5 flex items-center gap-3 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold text-sm">{fullName(emp)} <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 ml-1">{typeLabel}</span> <span className="text-[10px] text-slate-400 ml-1">· you are {stage}</span></div>
+                  <div className="text-xs text-slate-500 truncate">{details}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button disabled={apprBusy===rec.id} onClick={()=>actApproval(row,true)} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">{apprBusy===rec.id?'…':'✓ Approve'}</button>
+                  <button disabled={apprBusy===rec.id} onClick={()=>actApproval(row,false)} className="text-xs px-3 py-1.5 rounded-lg border border-rose-300 text-rose-600 font-semibold disabled:opacity-50">✕ Reject</button>
+                </div>
+              </div>
+            );
+          })}</div>
+        </div>
+      )}
       <div className="bg-white border rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b font-bold">📝 My Requests</div>
         {myRequests.length===0?<div className="text-center text-slate-400 py-8 text-sm">You haven’t filed any requests. Use the buttons above to file one.</div>:
@@ -26260,6 +26313,46 @@ function EmployeePortal({ profile, tab }){
 // attendance filings (OB/COA/OT/schedule/offset) and generic Document/Other
 // requests. Approving runs the SAME shared logic as the dedicated screens
 // (leave credits via setLeaveStatusShared, DTR writes via applyFilingToDtr).
+// ─── Per-employee filing approvers (two-step: Approver 1 → Approver 2) ───
+// Who should act on a PENDING filing/leave right now. kind: 'appr1' | 'appr2' |
+// 'hr' (no approvers set → HR/Admin pool) | 'done'. `who` is the profile id.
+function filingNextApprover(rec, emp){
+  const a1=emp?.approver_1_id||null, a2=emp?.approver_2_id||null;
+  if(!a1 && !a2) return { kind:'hr', who:null };
+  if(a1 && !rec.appr1_at) return { kind:'appr1', who:a1 };
+  if(a2 && !rec.appr2_at) return { kind:'appr2', who:a2 };
+  return { kind:'done', who:null };
+}
+// Approve one step. If Approver 1 acts and an Approver 2 exists, it becomes
+// intermediate (waits for Approver 2). Otherwise it finalizes (applies to the
+// DTR / deducts leave) and notifies the employee. HR/Admin can act too (oversight).
+async function approveFilingStep({ src, rec, emp, profile, sched }){
+  const a1=emp?.approver_1_id||null, a2=emp?.approver_2_id||null;
+  const table = src==='leave' ? 'hr_leaves' : 'attendance_filings';
+  const now=new Date().toISOString();
+  if(a1 && !rec.appr1_at && a2 && !rec.appr2_at){
+    await sb.from(table).update({ appr1_by:profile.id, appr1_at:now }).eq('id',rec.id);
+    try{ await sb.from('notifications').insert({ recipient_id:a2, actor_id:profile.id, type:'system', text:`✅ ${fullName(emp)}'s ${src==='leave'?'leave':'filing'} passed Approver 1 — your approval is needed.`, link_view:'profile' }); }catch(_){}
+    return { intermediate:true };
+  }
+  const stamp={};
+  if(a1 && !rec.appr1_at){ stamp.appr1_by=profile.id; stamp.appr1_at=now; }
+  if(a2 && !rec.appr2_at){ stamp.appr2_by=profile.id; stamp.appr2_at=now; }
+  if(src==='leave'){
+    if(Object.keys(stamp).length){ try{ await sb.from('hr_leaves').update(stamp).eq('id',rec.id); }catch(_){} }
+    await setLeaveStatusShared(rec,'approved',profile.id);
+  } else {
+    await sb.from('attendance_filings').update({ ...stamp, status:'approved', approved_by:profile.id, approved_at:now, applied:true }).eq('id',rec.id);
+    try{ await applyFilingToDtr(rec, sched, profile.id); }catch(_){}
+  }
+  try{ if(emp?.profile_id) await sb.from('notifications').insert({ recipient_id:emp.profile_id, actor_id:profile.id, type:'system', text:`✅ Your ${src==='leave'?'leave':'filing'} was approved.`, link_view:'profile' }); }catch(_){}
+  return { intermediate:false };
+}
+async function rejectFilingStep({ src, rec, emp, profile }){
+  if(src==='leave'){ await setLeaveStatusShared(rec,'rejected',profile.id); }
+  else { await sb.from('attendance_filings').update({ status:'rejected', applied:false }).eq('id',rec.id); }
+  try{ if(emp?.profile_id) await sb.from('notifications').insert({ recipient_id:emp.profile_id, actor_id:profile.id, type:'system', text:`✕ Your ${src==='leave'?'leave':'filing'} was not approved.`, link_view:'profile' }); }catch(_){}
+}
 function HRApprovalsView({ profile, employees }){
   const canAct=['admin','hr','hr_admin','agm','production_supervisor'].includes(profile.role);
   const [leaves,setLeaves]=useState([]); const [filings,setFilings]=useState([]); const [reqs,setReqs]=useState([]); const [scheds,setScheds]=useState([]);
@@ -26290,15 +26383,14 @@ function HRApprovalsView({ profile, employees }){
   const stChip=(s)=>{ const n=norm(s); const cls=n==='done'?'bg-emerald-100 text-emerald-700':n==='rejected'?'bg-rose-100 text-rose-700':'bg-amber-100 text-amber-700'; return <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${cls}`}>{s||'pending'}</span>; };
 
   async function approve(r){ if(!canAct) return; setBusy(r.key); try{
-    if(r.src==='leave'){ await setLeaveStatusShared(r.raw,'approved',profile.id); }
-    else if(r.src==='filing'){ await sb.from('attendance_filings').update({ status:'approved', approved_by:profile.id, approved_at:new Date().toISOString(), applied:true }).eq('id',r.raw.id); await applyFilingToDtr(r.raw, schedOf(r.emp), profile.id); }
-    else { setResolve(r); setBusy(''); return; }
+    if(r.src==='request'){ setResolve(r); setBusy(''); return; }
+    const emp=(employees||[]).find(e=>e.id===r.emp)||null;
+    await approveFilingStep({ src:r.src, rec:r.raw, emp, profile, sched:schedOf(r.emp) });
     await load();
   }catch(e){ alert(e.message||String(e)); } setBusy(''); }
   async function reject(r){ if(!canAct) return; setBusy(r.key); try{
-    if(r.src==='leave'){ await setLeaveStatusShared(r.raw,'rejected',profile.id); }
-    else if(r.src==='filing'){ await sb.from('attendance_filings').update({ status:'rejected', applied:false }).eq('id',r.raw.id); }
-    else { await sb.from('hr_requests').update({ status:'rejected', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',r.raw.id); }
+    if(r.src==='request'){ await sb.from('hr_requests').update({ status:'rejected', approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',r.raw.id); }
+    else { const emp=(employees||[]).find(e=>e.id===r.emp)||null; await rejectFilingStep({ src:r.src, rec:r.raw, emp, profile }); }
     await load();
   }catch(e){ alert(e.message||String(e)); } setBusy(''); }
   async function resolveReq(r, note){ setBusy('resolve'); try{ await sb.from('hr_requests').update({ status:'completed', resolution:note||null, approved_by:profile.id, approved_at:new Date().toISOString() }).eq('id',r.raw.id); setResolve(null); await load(); }catch(e){ alert(e.message||String(e)); } setBusy(''); }
@@ -42521,7 +42613,7 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
   async function delSchedule(s){ if(!confirm(`Delete schedule "${s.name}"?`)) return; setSchedules(prev=>prev.filter(x=>x.id!==s.id)); await sb.from('work_schedules').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',s.id); }
   async function delHoliday(h){ if(!confirm(`Delete holiday "${h.name}"?`)) return; setHolidays(prev=>prev.filter(x=>x.id!==h.id)); await sb.from('ph_holidays').update({ deleted_at:new Date().toISOString() }).eq('id',h.id); }
 
-  const TABS=[['tables','🏛 Statutory tables'],['schedules','🕒 Schedules'],['holidays','📅 Holidays'],['config','⚙ Rules & multipliers'],['employees','👥 Employee pay setup']];
+  const TABS=[['tables','🏛 Statutory tables'],['schedules','🕒 Schedules'],['holidays','📅 Holidays'],['config','⚙ Rules & multipliers'],['employees','👥 Employee pay setup'],['approvers','✅ Employee approvers']];
   const Lbl=({children})=> <label className="text-[10px] uppercase font-semibold text-slate-400">{children}</label>;
 
   return (
@@ -42661,6 +42753,34 @@ function PayrollSetupView({ profile, employees, profiles, reload }){
           </table></div></div>
         </div>
       )}
+
+      {/* ───── Employee approvers (two-step) ───── */}
+      {tab==='approvers' && (()=>{
+        const approverOpts=(profiles||[]).filter(p=>!p.deleted_at && p.role!=='client').slice().sort((a,b)=>String(a.name||a.email||'').localeCompare(String(b.name||b.email||'')));
+        const approverName=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+        const list=emps.slice().filter(e=>!empQ.trim()||`${e.first_name||''} ${e.last_name||''} ${e.department||''}`.toLowerCase().includes(empQ.trim().toLowerCase())).sort((a,b)=>`${a.last_name||''} ${a.first_name||''}`.localeCompare(`${b.last_name||''} ${b.first_name||''}`));
+        return (
+        <div className="space-y-3">
+          <div className="text-xs text-slate-500 bg-sky-50 border border-sky-200 rounded-lg p-2.5">Set who approves each employee's <b>leave, overtime and other filings</b>. <b>Approver 1</b> reviews first; if an <b>Approver 2</b> is set, it then passes to them for a double-check. Leave both blank to route that employee's filings to the <b>HR/Admin</b> pool. Each approver acts on their items in <b>Profile → My Requests → Approvals</b>.</div>
+          <div className="relative max-w-xs">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+            <input value={empQ} onChange={e=>setEmpQ(e.target.value)} placeholder="Search employee…" className="border rounded-lg pl-8 pr-7 py-1.5 text-sm w-full" />
+            {empQ && <button onClick={()=>setEmpQ('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm">✕</button>}
+          </div>
+          <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+            <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Dept</th><th className="text-left px-3 py-2">Approver 1</th><th className="text-left px-3 py-2">Approver 2 (optional)</th></tr></thead>
+            <tbody>{list.map(e=>(
+              <tr key={e.id} className="border-t hover:bg-slate-50">
+                <td className="px-3 py-2 font-medium">{[e.first_name,e.last_name].filter(Boolean).join(' ')||e.nickname||'—'}</td>
+                <td className="px-3 py-2 text-xs text-slate-500">{e.department||'—'}</td>
+                <td className="px-3 py-2">{canHR?<select value={e.approver_1_id||''} onChange={ev=>saveEmp(e,{approver_1_id:ev.target.value||null})} className="input !py-1 text-xs min-w-[150px]"><option value="">— none (HR/Admin) —</option>{approverOpts.map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select>:approverName(e.approver_1_id)}</td>
+                <td className="px-3 py-2">{canHR?<select value={e.approver_2_id||''} onChange={ev=>saveEmp(e,{approver_2_id:ev.target.value||null})} className="input !py-1 text-xs min-w-[150px]"><option value="">— none —</option>{approverOpts.map(p=><option key={p.id} value={p.id}>{p.name||p.email}</option>)}</select>:approverName(e.approver_2_id)}</td>
+              </tr>
+            ))}{list.length===0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-slate-400 text-sm">No employees.</td></tr>}</tbody>
+          </table></div></div>
+        </div>
+        );
+      })()}
 
       </>}
       {editSched && <ScheduleModal sched={editSched==='new'?null:editSched} profile={profile} onClose={()=>setEditSched(null)} onSaved={()=>{ setEditSched(null); load(); }} />}
