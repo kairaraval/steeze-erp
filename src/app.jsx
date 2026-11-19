@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 982 · Cash Advance excess returns (Finance): the Liquidate/Cash Advance screen now has a proper return log — record full or PARTIAL returns, choose Cash on Hand or a Bank deposit, note who received it and a reference. Bank deposits post Dr Cash in Bank / Cr Cash on Hand automatically; cash stays in Cash on Hand. Full return history is kept, over-returning is blocked, and liquidation no longer auto-deposits the excess (deposit is now an explicit step). Budget Requests + a Cash-on-Hand monitoring report are the next step.";
+const BUILD = "Live build 984 · New Finance module — Other Collections (non-sales cash receipts): record money from scrap (kalakal), used machinery, equipment disposal and misc. It recognizes Accounts Receivable – Others and clears it as payments (cash or bank) come in, with partial payments, status tracking, and automatic General Ledger posting. Note for asset disposals: book carrying value, depreciation and gain/loss via a Journal Entry — proceeds aren't all income.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -45080,7 +45080,7 @@ function ApprovalsView({ profile, profiles, employees, rfps, requests, budgetReq
       {openRfp && <RFPModal rfp={openRfp} profile={profile} profiles={profiles} orders={orders} suppliers={suppliers} leaveCashouts={leaveCashouts} employees={employees} leaveBalances={leaveBalances} onClose={()=>setOpenRfp(null)} onSaved={()=>{ setOpenRfp(null); reload(); }} onPay={()=>{}} />}
       {payingBank && <BankPaidPickModal rfp={payingBank} bankAccounts={bankAccounts} onClose={()=>setPayingBank(null)} onConfirm={(bankId,ref)=>doMarkBankPaid(payingBank,bankId,ref)} />}
       {/* Budget request approval — reuses the form modal which has approve/reject buttons for admins */}
-      {openBudget && <BudgetRequestFormModal existing={openBudget} profile={profile} canApprove={true} onClose={()=>setOpenBudget(null)} onSaved={()=>{ setOpenBudget(null); reload(); }} />}
+      {openBudget && <BudgetRequestFormModal existing={openBudget} profile={profile} canApprove={true} bankAccounts={bankAccounts} onClose={()=>setOpenBudget(null)} onSaved={()=>{ setOpenBudget(null); reload(); }} />}
       {liqDocs && <LiquidationDocsModal kind={liqDocs.kind} data={liqDocs.data} profiles={profiles} onClose={()=>setLiqDocs(null)} />}
       {/* Voucher review — uses the same view modal as the Vouchers list,
          giving Admin access to the Approve & Sign button + Print there too. */}
@@ -46068,7 +46068,7 @@ function SourcingItineraryModal({ existing, profile, onClose, onSaved }){
   );
 }
 
-function BudgetRequestsView({ profile, profiles, budgetRequests, chartAccounts, costCenters, reload }){
+function BudgetRequestsView({ profile, profiles, budgetRequests, chartAccounts, costCenters, bankAccounts, reload }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [filter,setFilter]=useState('');
@@ -46148,7 +46148,7 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, chartAccounts, 
         {myRequests.length===0 && (
           <div className="text-center text-slate-400 text-sm py-8">No requests yet. Submit your first one above.</div>
         )}
-        {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={false} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+        {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={false} chartAccounts={chartAccounts} costCenters={costCenters} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       </div>
     );
   }
@@ -46210,13 +46210,13 @@ function BudgetRequestsView({ profile, profiles, budgetRequests, chartAccounts, 
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No budget requests yet. Click "+ New request" to submit one.</td></tr>}</tbody>
       </table></div></div>
-      {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={canApprove} chartAccounts={chartAccounts} costCenters={costCenters} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
+      {(creating||editing) && <BudgetRequestFormModal existing={editing} profile={profile} canApprove={canApprove} chartAccounts={chartAccounts} costCenters={costCenters} bankAccounts={bankAccounts} onClose={()=>{ setCreating(false); setEditing(null); }} onSaved={()=>{ setCreating(false); setEditing(null); reload(); }} />}
       {receiptView && <MediaLightbox url={receiptView.url} path={receiptView.kind==='pdf'?receiptView.path:undefined} kind={receiptView.kind} name="Attachment" onClose={()=>setReceiptView(null)} />}
     </div>
   );
 }
 
-function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, costCenters, onClose, onSaved }){
+function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, costCenters, bankAccounts, onClose, onSaved }){
   const isEdit = !!existing;
   const [f,setF]=useState({
     department: existing?.department || (DEPARTMENT_OPTIONS[0]),
@@ -46251,6 +46251,39 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
   const approvedAmt = Number(existing?.amount)||0;
   const liqRemaining = approvedAmt - liqTotal;
   const isLiquidated = status==='spent' || !!existing?.liquidated_at;
+  // Excess-return log (Option B) — mirrors Cash Advances.
+  const brExcess = Math.max(0, liqRemaining);
+  const [brRets,setBrRets]=useState(Array.isArray(existing?.returns)?existing.returns:[]);
+  const brRetTotal = brRets.reduce((s,r)=>s+Number(r.amount||0),0);
+  const brExRet = existing?.excess_returned_at||null;
+  const [brRetAmt,setBrRetAmt]=useState('');
+  const [brRetMethod,setBrRetMethod]=useState('cash_on_hand');
+  const [brRetBank,setBrRetBank]=useState('');
+  const [brRetRef,setBrRetRef]=useState('');
+  const [brRetBy,setBrRetBy]=useState('');
+  const [brRetBusy,setBrRetBusy]=useState(false);
+  async function recordBrReturn(){
+    const remaining = Math.max(0, brExcess - brRetTotal);
+    const amt = Number(brRetAmt) || remaining;
+    if(amt<=0){ setMsg('Enter an amount to return.'); return; }
+    if(amt > remaining + 0.01){ setMsg(`Can't return ${peso(amt)} — only ${peso(remaining)} excess remains.`); return; }
+    if(brRetMethod==='bank_deposit' && !brRetBank){ setMsg('Pick the bank the cash was deposited to.'); return; }
+    setBrRetBusy(true); setMsg('');
+    try{
+      // Monitoring log only. Budget requests are expensed via their voucher (not
+      // held as an advance through Cash on Hand), so we do NOT auto-post a GL
+      // entry here — that would mis-classify. Finance records the bank deposit /
+      // expense correction via Accounting. The log captures amount/date/method/
+      // who/reference for tracking and partial returns.
+      const entry = { amount: pRound(amt), date: todayManila(), method: brRetMethod, bank_id: brRetMethod==='bank_deposit'?brRetBank:null, received_by: brRetBy||null, reference: brRetRef||null, by: profile.id, at: new Date().toISOString() };
+      const next=[...brRets, entry];
+      const fully=(brRetTotal+amt)>=brExcess-0.01;
+      const patch={ returns: next }; if(fully){ patch.excess_returned_at=new Date().toISOString(); patch.excess_return_method=brRetMethod; }
+      await sb.from('budget_requests').update(patch).eq('id', existing.id);
+      setBrRets(next); setBrRetAmt(''); setBrRetRef('');
+    }catch(e){ setMsg('Return failed: '+(e.message||e)); }
+    setBrRetBusy(false);
+  }
   async function saveLiqDocs(next){ setLiqDocs(next); if(isEdit){ try { await sb.from('budget_requests').update({ attachments: next }).eq('id', existing.id); } catch(_){} } }
   async function handleLiqReceipt(id, file){
     if(!file) return; setLiqUploadingId(id);
@@ -46465,6 +46498,34 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
                 <button onClick={()=>saveLiquidation(true)} disabled={busy} className="flex-1 py-2 rounded-lg bg-slate-700 text-white font-semibold disabled:opacity-50">{busy?'Saving…':'✓ Finalize liquidation (mark spent)'}</button>
               </div>
             )}
+            {/* Excess cash return log — monitoring (partial allowed) */}
+            {isLiquidated && (brExcess>0.01 || brRets.length>0) && (()=>{ const remaining=Math.max(0,brExcess-brRetTotal); return (
+              <div className="border rounded-lg p-3 bg-blue-50/50 border-blue-200 text-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-blue-800">Excess to return: {peso(brExcess)}</div>
+                  {brRetTotal>0.01 && <div className="text-emerald-700 font-semibold">Returned: {peso(brRetTotal)}</div>}
+                </div>
+                {brExRet && brRets.length===0 && <div className="text-emerald-700">✓ Previously marked returned on {fmtDate(String(brExRet).slice(0,10))}</div>}
+                {!(brExRet && brRets.length===0) && (remaining>0.01 ? <div className="text-slate-600">Remaining to return: <span className="font-semibold">{peso(remaining)}</span></div> : brRets.length>0 ? <div className="text-emerald-700 font-semibold">✓ Fully returned</div> : null)}
+                {brRets.length>0 && (
+                  <div className="space-y-1 border-t border-blue-200 pt-1.5">
+                    {brRets.map((r,i)=>(<div key={i} className="flex items-center justify-between gap-2"><span className="text-slate-600 truncate">{fmtDate(String(r.date).slice(0,10))} · {r.method==='bank_deposit'?`🏦 ${(bankAccounts||[]).find(b=>b.id===r.bank_id)?.bank_name||'Bank'}`:'💵 Cash on hand'}{r.received_by?` · ${r.received_by}`:''}{r.reference?` · ${r.reference}`:''}</span><span className="font-semibold whitespace-nowrap">{peso(r.amount)}</span></div>))}
+                  </div>
+                )}
+                {canApprove && remaining>0.01 && !(brExRet && brRets.length===0) && (
+                  <div className="space-y-1.5 border-t border-blue-200 pt-2">
+                    <input type="number" value={brRetAmt} onChange={e=>setBrRetAmt(e.target.value)} placeholder={`Amount (max ${peso(remaining)})`} className="input text-xs w-full" />
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <select value={brRetMethod} onChange={e=>setBrRetMethod(e.target.value)} className="input text-xs"><option value="cash_on_hand">💵 Cash on hand</option><option value="bank_deposit">🏦 Bank deposit</option></select>
+                      {brRetMethod==='bank_deposit' ? <select value={brRetBank} onChange={e=>setBrRetBank(e.target.value)} className="input text-xs"><option value="">— bank —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select> : <input value={brRetBy} onChange={e=>setBrRetBy(e.target.value)} placeholder="Received by" className="input text-xs" />}
+                    </div>
+                    <input value={brRetRef} onChange={e=>setBrRetRef(e.target.value)} placeholder="Reference / deposit slip (optional)" className="input text-xs w-full" />
+                    <button onClick={recordBrReturn} disabled={brRetBusy} className="w-full py-1.5 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-50">{brRetBusy?'Recording…':'＋ Record return'}</button>
+                    <div className="text-[10px] text-slate-500">Logged for monitoring. A budget is expensed via its voucher, so Accounting records the bank deposit / any GL correction separately.</div>
+                  </div>
+                )}
+              </div>
+            ); })()}
           </div>
         )}
       </div>
@@ -47466,6 +47527,9 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   const isAdmin = profile.role==='admin';
   const isAccounting = profile.role==='accounting' || profile.role==='accounting_officer';
   const canEdit = isAdmin || isAccounting;
+  // Returned-excess monitoring (Option B): physical cash returned & still held on
+  // hand vs. deposited to the bank, summed across all cash advances.
+  const retSums = React.useMemo(()=>{ let held=0, dep=0; (cashAdvances||[]).forEach(c=>{ if(c.deleted_at) return; (Array.isArray(c.returns)?c.returns:[]).forEach(r=>{ const a=Number(r.amount||0); if(r.method==='bank_deposit') dep+=a; else held+=a; }); }); return { held, dep }; },[cashAdvances]);
   async function deleteCA(c){
     const label = isPetty ? 'petty cash float' : 'cash advance';
     const linkedExpenses = expensesFor(c);
@@ -47619,6 +47683,13 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
         </div>
       </div>
 
+      {!isPetty && (retSums.held>0.01 || retSums.dep>0.01) && (
+        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 px-4 py-2.5 flex items-center gap-4 flex-wrap text-sm">
+          <span className="font-semibold text-blue-900">Returned excess cash</span>
+          <span className="text-slate-600">💵 Held on hand (not deposited): <span className="font-bold text-blue-800">{peso(retSums.held)}</span></span>
+          <span className="text-slate-600">🏦 Deposited to bank: <span className="font-bold text-emerald-700">{peso(retSums.dep)}</span></span>
+        </div>
+      )}
       {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         <Kpi icon="📄" label={isPetty?'Open Batches':'Open advances'} value={kpiOpenCount} color="bg-blue-100" />
@@ -49033,7 +49104,7 @@ function categoryToAccountCode(cat){
 // NOTE: this is a derived ledger for management + tax-prep. Revenue is
 // recognised on collection (cash basis). Review before filing.
 function buildGLPostings(data){
-  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[], salesOrders=[], rfps=[] } = data;
+  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[], salesOrders=[], rfps=[], otherCollections=[] } = data;
   const rfpById=new Map((rfps||[]).map(r=>[r.id,r]));
   const nameOf=(code)=> (chartAccounts.find(a=>a.code===code)?.name)||code;
   const P=[];
@@ -49158,6 +49229,21 @@ function buildGLPostings(data){
     if(vat>0) push(e.date, '101011', vat, 0, 'PC', '', 'Input VAT', e.cost_center_id, 'expense', e.id);
     push(e.date, CASH_HAND, 0, amt, 'PC', '', 'Paid from petty cash', null, 'expense', e.id);
   });
+  // E. Other Collections (non-sales cash receipts: scrap, used machines, etc.).
+  // Recognition: Dr AR – Others / Cr income account (full amount). Each payment:
+  // Dr receiving account (Cash on Hand or Cash in Bank) / Cr AR – Others. So
+  // AR – Others nets to zero once a collection is fully paid.
+  (otherCollections||[]).filter(c=>!c.deleted_at).forEach(c=>{
+    const amt=Number(c.amount)||0; if(amt<=0) return;
+    push(c.date, '101016', amt, 0, 'OC', c.number, `${c.payor||'Collection'} — ${c.description||''}`, null, 'other_collection', c.id);
+    push(c.date, c.income_account_code||'501003', 0, amt, 'OC', c.number, 'Non-sales collection recognized', null, 'other_collection', c.id);
+    (Array.isArray(c.payments)?c.payments:[]).forEach(p=>{
+      const pa=Number(p.amount)||0; if(pa<=0) return;
+      const acct = p.method==='cash' ? CASH_HAND : cashCodeFor(p.bank_id);
+      push(p.date||c.date, acct, pa, 0, 'OC', c.number, 'Collection received', null, 'other_collection', c.id);
+      push(p.date||c.date, '101016', 0, pa, 'OC', c.number, 'Cleared AR – Others', null, 'other_collection', c.id);
+    });
+  });
   return P;
 }
 // Sum postings into per-account balances (respecting normal balance sign).
@@ -49179,8 +49265,145 @@ function finReportYears(postings){
   const arr=[...ys].sort().reverse(); if(!arr.length) arr.push(String(new Date().getFullYear())); return arr;
 }
 
-function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps]);
+/* ─────────── OTHER COLLECTIONS / NON-SALES CASH RECEIPTS ─────────── */
+const OC_TYPES=[['scrap','Scrap materials (kalakal)'],['used_machinery','Used machinery'],['equipment','Equipment disposal'],['other','Other collection']];
+function ocStatus(c){ const paid=(Array.isArray(c.payments)?c.payments:[]).reduce((s,p)=>s+Number(p.amount||0),0); const amt=Number(c.amount||0); return { paid, bal:Math.max(0,amt-paid), status: paid<=0.01?'unpaid':(paid>=amt-0.01?'paid':'partial') }; }
+const OC_STATUS_META={ unpaid:['Unpaid','bg-amber-100 text-amber-700'], partial:['Partial','bg-blue-100 text-blue-700'], paid:['Paid','bg-emerald-100 text-emerald-700'] };
+function ocTypeLabel(t){ return (OC_TYPES.find(x=>x[0]===t)||[])[1]||t; }
+function OtherCollectionsView({ profile, profiles, otherCollections, chartAccounts, bankAccounts, reload }){
+  const canEdit = profile.role==='admin'||profile.role==='accounting'||profile.role==='accounting_officer';
+  const [open,setOpen]=useState(null); // row object or 'new'
+  const [search,setSearch]=useState('');
+  const [fStatus,setFStatus]=useState('');
+  const live=(otherCollections||[]).filter(c=>!c.deleted_at);
+  const q=search.trim().toLowerCase();
+  const rows=live.filter(c=>{ const s=ocStatus(c); return (!fStatus||s.status===fStatus) && (!q || `${c.number||''} ${c.payor||''} ${c.description||''} ${ocTypeLabel(c.collection_type)}`.toLowerCase().includes(q)); });
+  const totals=live.reduce((a,c)=>{ const s=ocStatus(c); a.collectible+=Number(c.amount||0); a.received+=s.paid; a.outstanding+=s.bal; return a; },{collectible:0,received:0,outstanding:0});
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🧾 Other Collections</h1><p className="text-slate-500 text-sm">Non-sales cash receipts — scrap (kalakal), used machinery, equipment disposal and other collections. Records a receivable (AR – Others) and clears it as payments come in.</p></div>
+          {canEdit && <button onClick={()=>setOpen('new')} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">＋ New collection</button>}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase tracking-wide text-slate-400">Total collectible</div><div className="text-2xl font-bold mt-1">{peso(totals.collectible)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase tracking-wide text-slate-400">Received</div><div className="text-2xl font-bold mt-1 text-emerald-700">{peso(totals.received)}</div></div>
+        <div className="bg-white border rounded-xl p-4"><div className="text-[10px] uppercase tracking-wide text-slate-400">Outstanding (AR – Others)</div><div className="text-2xl font-bold mt-1 text-amber-700">{peso(totals.outstanding)}</div></div>
+      </div>
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search payor, description…" className="border rounded-lg px-3 py-1.5 text-sm w-64" />
+        <select value={fStatus} onChange={e=>setFStatus(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm"><option value="">All statuses</option><option value="unpaid">Unpaid</option><option value="partial">Partial</option><option value="paid">Paid</option></select>
+      </div>
+      <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr><th className="text-left px-3 py-2">#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Type</th><th className="text-left px-3 py-2">Payor / Buyer</th><th className="text-left px-3 py-2">Description</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Received</th><th className="text-right px-3 py-2">Balance</th><th className="text-center px-3 py-2">Status</th></tr></thead>
+        <tbody>{rows.map(c=>{ const s=ocStatus(c); const sm=OC_STATUS_META[s.status]; return (
+          <tr key={c.id} className="border-t hover:bg-indigo-50/40 cursor-pointer" onClick={()=>setOpen(c)}>
+            <td className="px-3 py-2 font-mono text-xs text-slate-500">{c.number||'—'}</td>
+            <td className="px-3 py-2 text-xs">{fmtDate(c.date)}</td>
+            <td className="px-3 py-2 text-xs">{ocTypeLabel(c.collection_type)}</td>
+            <td className="px-3 py-2">{c.payor||'—'}</td>
+            <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[200px]">{c.description||'—'}</td>
+            <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td>
+            <td className="px-3 py-2 text-right text-emerald-700">{peso(s.paid)}</td>
+            <td className="px-3 py-2 text-right text-amber-700">{peso(s.bal)}</td>
+            <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${sm[1]}`}>{sm[0]}</span></td>
+          </tr>
+        ); })}{rows.length===0 && <tr><td colSpan={9} className="px-3 py-10 text-center text-slate-400 text-sm">No collections yet.</td></tr>}</tbody>
+      </table></div></div>
+      {open && <OtherCollectionModal row={open==='new'?null:open} profile={profile} chartAccounts={chartAccounts} bankAccounts={bankAccounts} canEdit={canEdit} onClose={()=>setOpen(null)} onSaved={()=>{ setOpen(null); reload&&reload(); }} />}
+    </div>
+  );
+}
+function OtherCollectionModal({ row, profile, chartAccounts, bankAccounts, canEdit, onClose, onSaved }){
+  const isEdit=!!row?.id;
+  const incomeOpts=(chartAccounts||[]).filter(a=>a.type==='Income').sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+  const [f,setF]=useState({ date:row?.date||todayManila(), collection_type:row?.collection_type||'scrap', payor:row?.payor||'', description:row?.description||'', amount:row?.amount!=null?String(row.amount):'', income_account_code:row?.income_account_code||'501003', notes:row?.notes||'' });
+  const [pays,setPays]=useState(Array.isArray(row?.payments)?row.payments:[]);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [pAmt,setPAmt]=useState(''); const [pMethod,setPMethod]=useState('cash'); const [pBank,setPBank]=useState(''); const [pRef,setPRef]=useState(''); const [pBusy,setPBusy]=useState(false);
+  const up=(k,v)=>setF(p=>({...p,[k]:v}));
+  const paid=pays.reduce((s,p)=>s+Number(p.amount||0),0); const amt=Number(f.amount)||0; const bal=Math.max(0,amt-paid);
+  async function save(){
+    if(!f.payor.trim()){ setMsg('Payor / buyer is required.'); return; }
+    if(amt<=0){ setMsg('Enter the amount.'); return; }
+    setBusy(true); setMsg('');
+    const status = paid<=0.01?'unpaid':(paid>=amt-0.01?'paid':'partial');
+    const payload={ date:f.date, collection_type:f.collection_type, payor:f.payor.trim(), description:f.description.trim()||null, amount:pRound(amt), income_account_code:f.income_account_code, notes:f.notes.trim()||null, status, payments:pays, updated_at:new Date().toISOString() };
+    try{
+      if(isEdit){ const { error }=await sb.from('other_collections').update(payload).eq('id',row.id); if(error) throw error; }
+      else {
+        const monthKey=f.date.slice(0,7);
+        const { data:ex }=await sb.from('other_collections').select('number').like('number',`OC-${monthKey}-%`);
+        let max=0; (ex||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+        payload.number=`OC-${monthKey}-${String(max+1).padStart(3,'0')}`; payload.created_by=profile.id;
+        const { error }=await sb.from('other_collections').insert(payload); if(error) throw error;
+      }
+      setBusy(false); onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  async function recordPayment(){
+    const a=Number(pAmt)||bal;
+    if(a<=0){ setMsg('Enter a payment amount.'); return; }
+    if(a>bal+0.01){ setMsg(`Can't receive ${peso(a)} — only ${peso(bal)} outstanding.`); return; }
+    if(pMethod==='bank' && !pBank){ setMsg('Pick the receiving bank.'); return; }
+    if(!isEdit){ setMsg('Save the collection first, then record payments.'); return; }
+    setPBusy(true); setMsg('');
+    const entry={ amount:pRound(a), date:todayManila(), method:pMethod, bank_id:pMethod==='bank'?pBank:null, reference:pRef||null, by:profile.id, at:new Date().toISOString() };
+    const next=[...pays, entry]; const np=next.reduce((s,p)=>s+Number(p.amount||0),0);
+    const status = np<=0.01?'unpaid':(np>=amt-0.01?'paid':'partial');
+    try{ const { error }=await sb.from('other_collections').update({ payments:next, status, updated_at:new Date().toISOString() }).eq('id',row.id); if(error) throw error; setPays(next); setPAmt(''); setPRef(''); }
+    catch(e){ setMsg(e.message||String(e)); }
+    setPBusy(false);
+  }
+  const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:code; };
+  return (
+    <Modal title={isEdit?`Other Collection ${row.number||''}`:'New collection'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Date"><input type="date" className="input" value={f.date} disabled={!canEdit} onChange={e=>up('date',e.target.value)} /></TpLbl>
+          <TpLbl t="Collection type"><select className="input" value={f.collection_type} disabled={!canEdit} onChange={e=>up('collection_type',e.target.value)}>{OC_TYPES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select></TpLbl>
+        </div>
+        <TpLbl t="Payor / Buyer *"><input className="input" value={f.payor} disabled={!canEdit} onChange={e=>up('payor',e.target.value)} placeholder="Who is paying / buying" /></TpLbl>
+        <TpLbl t="Description"><input className="input" value={f.description} disabled={!canEdit} onChange={e=>up('description',e.target.value)} placeholder="e.g. Sold scrap fabric · 50kg" /></TpLbl>
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Amount *"><input type="number" className="input" value={f.amount} disabled={!canEdit} onChange={e=>up('amount',e.target.value)} /></TpLbl>
+          <TpLbl t="Income / clearing account"><select className="input" value={f.income_account_code} disabled={!canEdit} onChange={e=>up('income_account_code',e.target.value)}>{incomeOpts.length?incomeOpts.map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>):<option value="501003">501003 · Other Income</option>}</select></TpLbl>
+        </div>
+        <TpLbl t="Notes"><textarea className="input min-h-[50px]" value={f.notes} disabled={!canEdit} onChange={e=>up('notes',e.target.value)} /></TpLbl>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
+          On save, this recognizes <b>Dr Accounts Receivable – Others</b> / <b>Cr {acctName(f.income_account_code)}</b> for {peso(amt)}. Each payment posts <b>Dr Cash on Hand / Cash in Bank</b> / <b>Cr AR – Others</b>. For machinery/asset disposals, book the asset's carrying value, depreciation and gain/loss via a Journal Entry — proceeds aren't all income.
+        </div>
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        {canEdit && <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save changes':'Create collection'}</button>}
+
+        {isEdit && (
+          <div className="border-t pt-3 space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <div className="font-semibold text-slate-800">💵 Payments received</div>
+              <div className="text-xs">Received <span className="font-bold text-emerald-700">{peso(paid)}</span> · Outstanding <span className="font-bold text-amber-700">{peso(bal)}</span></div>
+            </div>
+            {pays.length>0 && <div className="space-y-1 text-xs">{pays.map((p,i)=>(<div key={i} className="flex items-center justify-between gap-2 border rounded px-2 py-1 bg-white"><span className="text-slate-600">{fmtDate(String(p.date).slice(0,10))} · {p.method==='bank'?`🏦 ${(bankAccounts||[]).find(b=>b.id===p.bank_id)?.bank_name||'Bank'}`:'💵 Cash on hand'}{p.reference?` · ${p.reference}`:''}</span><span className="font-semibold">{peso(p.amount)}</span></div>))}</div>}
+            {canEdit && bal>0.01 && (
+              <div className="space-y-1.5 bg-emerald-50/50 border border-emerald-200 rounded-lg p-2.5">
+                <input type="number" value={pAmt} onChange={e=>setPAmt(e.target.value)} placeholder={`Amount received (max ${peso(bal)})`} className="input text-xs w-full" />
+                <div className="grid grid-cols-2 gap-1.5">
+                  <select value={pMethod} onChange={e=>setPMethod(e.target.value)} className="input text-xs"><option value="cash">💵 Cash on hand</option><option value="bank">🏦 Bank deposit</option></select>
+                  {pMethod==='bank' ? <select value={pBank} onChange={e=>setPBank(e.target.value)} className="input text-xs"><option value="">— bank —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select> : <input value={pRef} onChange={e=>setPRef(e.target.value)} placeholder="Reference (optional)" className="input text-xs" />}
+                </div>
+                {pMethod==='bank' && <input value={pRef} onChange={e=>setPRef(e.target.value)} placeholder="Deposit slip / reference (optional)" className="input text-xs w-full" />}
+                <button onClick={recordPayment} disabled={pBusy} className="w-full py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">{pBusy?'Recording…':'＋ Record payment received'}</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections]);
   const years = finReportYears(postings);
   const [year,setYear]=useState('all');
   const [sel,setSel]=useState(null); // account code drilled into
@@ -49244,7 +49467,7 @@ function GLTxnModal({ clicked, lines, vouchers, expenses, cashAdvances, bankTran
     : kind==='bank_txn'? (bankTransactions||[]).find(b=>b.id===id)
     : kind==='so_payment'? (soPayments||[]).find(p=>p.id===id)
     : kind==='journal'? (journalEntries||[]).find(j=>j.id===id) : null;
-  const srcLabel = { voucher:'Disbursement Voucher', expense:'Expense', cash_advance:'Cash Advance', bank_txn:'Bank Transaction', so_payment:'Sales Collection', journal:'Journal Entry' }[kind] || clicked.source;
+  const srcLabel = { voucher:'Disbursement Voucher', expense:'Expense', cash_advance:'Cash Advance', bank_txn:'Bank Transaction', so_payment:'Sales Collection', journal:'Journal Entry', other_collection:'Other Collection' }[kind] || clicked.source;
   const totD=lines.reduce((s,l)=>s+Number(l.debit||0),0), totC=lines.reduce((s,l)=>s+Number(l.credit||0),0);
   const Row=({k,v})=> v ? <div className="flex gap-2 text-xs"><span className="text-slate-400 w-28 shrink-0">{k}</span><span className="font-medium">{v}</span></div> : null;
   const detail=()=>{
@@ -49433,8 +49656,8 @@ function MonthEndClosePanel({ month, profile, profiles, bankAccounts, costCenter
   );
 }
 function monLabelOf(m){ try{ const [y,mo]=String(m).split('-'); return new Date(Number(y),Number(mo)-1,1).toLocaleDateString('en-PH',{month:'long',year:'numeric'}); }catch(_){ return m; } }
-function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles, apVouchers, rfps, reload }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps]);
+function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles, apVouchers, rfps, otherCollections, reload }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
   const [year,setYear]=useState(years[0]);
@@ -55571,6 +55794,7 @@ function App(){
   const [budgetRequests,setBudgetRequests]=useState([]);
   // Sprint 2: expenses, cash advances (petty cash). Budget requests already loaded above.
   const [expenses,setExpenses]=useState([]); const [cashAdvances,setCashAdvances]=useState([]);
+  const [otherCollections,setOtherCollections]=useState([]);
   const [pcReplenishments,setPcReplenishments]=useState([]);
   // Custom Payment Calendar events — Finance-added items that don't fit the
   // auto categories (recurring reminders, ad-hoc planned spend, etc.)
@@ -55889,6 +56113,7 @@ function App(){
     fetchAllRows('transmittal_items','*','position',true).then(r=>{ if(r && !r.error && r.data) setTransmittalItems(r.data); }).catch(()=>{});
     // Daily department check-ins (small) — recent window for the Command Center + weekly report.
     sb.from('daily_checkins').select('*').gte('checkin_date', new Date(Date.now()-21*86400000).toISOString().slice(0,10)).order('checkin_date',{ascending:false}).then(r=>{ if(r && !r.error && r.data) setDailyCheckins(r.data); }).catch(()=>{});
+    sb.from('other_collections').select('*').is('deleted_at',null).order('date',{ascending:false}).then(r=>{ if(r && !r.error && r.data) setOtherCollections(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).maybeSingle(),
       fetchAll(()=>sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate,commission_model,commission_quota,commission_tiers').is('deleted_at', null)),
@@ -56127,7 +56352,7 @@ function App(){
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
         'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
-        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','fin-reports','budgets','estimates','petty-cash','cash-advances','rfps','expense-log',
+        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','fin-reports','budgets','estimates','petty-cash','cash-advances','other-collections','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-requests','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll','attendance','attendance-filings','pay-setup','payroll-run',
         'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
@@ -56215,7 +56440,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','cash-position','cash-flow','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','other-collections','cash-position','cash-flow','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -56822,6 +57047,7 @@ function App(){
     ['expense-log','Expense Log','📚'],
     ['petty-cash','Petty Cash','💵'],
     ['cash-advances','Cash Advances','🧾'],
+    ['other-collections','Other Collections','🧾'],
     ['pur-cash-advance','Purchasing DV Advances','🛍'],
     ['owner-advance','Owner Advances','👑'],
     ['budgets','Budget Requests','💰'],
@@ -57397,7 +57623,7 @@ function App(){
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
         {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
-        {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} chartAccounts={chartAccounts} costCenters={costCenters} reload={loadAll} />}
+        {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} chartAccounts={chartAccounts} costCenters={costCenters} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="petty_cash" />}
         {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="cash_advance" />}
         {view==='pur-cash-advance' && <PurchasingCashAdvanceView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} chartAccounts={chartAccounts} reload={loadAll} />}
@@ -57432,9 +57658,10 @@ function App(){
         {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
         {view==='admin-maintenance' && <AdminMaintenanceView profile={profile} adminMaintenance={adminMaintenance} assets={assets} adminContacts={adminContacts} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
-        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} rfps={rfps} />}
+        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} rfps={rfps} otherCollections={otherCollections} />}
+        {view==='other-collections' && <OtherCollectionsView profile={profile} profiles={profiles} otherCollections={otherCollections} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
-        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} rfps={rfps} reload={loadAll} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} rfps={rfps} otherCollections={otherCollections} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
