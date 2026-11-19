@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 977 · Order changes cascade: when the sales owner or an admin edits the quantity/items on a Closed Won or Sampling deal, a confirmation gate appears — and on confirm the change flows to the Sales Order (incl. amount + balance due), the production job, and every department board (sewing, sorting/packing, printing, embroidery, knitting). Logged work is kept; you're warned if a board already produced more or an SO is overpaid. No more fixing the numbers by hand everywhere.";
+const BUILD = "Live build 978 · Delivered & Paid automation fix: moving a lead to 'Delivered - For Payment' now auto-jumps to 'Delivered & Paid' when its Sales Order is already fully paid (covers the pay-first-then-deliver flow). Works from both the stage dropdown and pipeline drag; pay-after-delivery already worked.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -3346,6 +3346,7 @@ function LeadDetail({ profile, profiles, reload, lead, clients, estimates, invoi
       return;
     }
     setStageBusy(true);
+    st = await effectiveDeliveryStage(l.id, st);
     const wasSold=SOLD_STAGES.includes(l.stage); const willBeSold=SOLD_STAGES.includes(st);
     const patch={ stage:st, stage_changed_at:new Date().toISOString() };
     if(willBeSold && !l.won_at) patch.won_at=todayManila();
@@ -17164,6 +17165,7 @@ function Pipeline({ profile, profiles, clients, leads, activityCounts, onOpenLea
       alert(`⚠ "${l.title||'this lead'}" has no Due Date.\n\nOpen the lead → Edit → set the Due Date before moving it to Closed Won.`);
       return;
     }
+    st = await effectiveDeliveryStage(l.id, st);
     const wasSold = SOLD_STAGES.includes(l.stage);
     const willBeSold = SOLD_STAGES.includes(st);
     const patch={ stage:st };
@@ -39396,6 +39398,20 @@ function soOpenBalance(so){ return so.balance_due!=null ? (Number(so.balance_due
 async function advanceLeadOnSOPaid(leadId){
   if(!leadId) return;
   try { await sb.from('leads').update({ stage:'delivered_paid', payment_status:'paid' }).eq('id', leadId).eq('stage','delivered_pending'); } catch(_){}
+}
+// If a lead is being moved to "Delivered - For Payment" but its Sales Order(s)
+// are ALREADY fully paid, jump straight to "Delivered & Paid". Covers the common
+// pay-first-then-deliver flow — the payment arrived while the lead was still Won,
+// so the payment-time auto-advance couldn't fire yet. Returns the stage to set.
+async function effectiveDeliveryStage(leadId, st){
+  if(st!=='delivered_pending' || !leadId) return st;
+  try{
+    const { data: sos }=await sb.from('sales_orders').select('status,balance_due,total,amount_paid')
+      .eq('lead_id',leadId).is('deleted_at',null).neq('status','cancelled');
+    const list=(sos||[]).filter(s=> Number(s.total||0)>0 || Number(s.amount_paid||0)>0 );
+    if(list.length>0 && list.every(s=>{ const bal=s.balance_due!=null?Number(s.balance_due):(Number(s.total||0)-Number(s.amount_paid||0)); return Number(s.amount_paid||0)>0.01 && bal<=0.01; })) return 'delivered_paid';
+  }catch(_){}
+  return st;
 }
 function arDaysPast(so, todayMs){ const due=arDueDate(so); if(!due) return null; return Math.floor((todayMs-due.getTime())/86400000); }
 function arBucketKey(so, todayMs){ const days=arDaysPast(so, todayMs); if(days==null || days<=0) return 'current'; if(days<=30) return '1-30'; if(days<=60) return '31-60'; if(days<=90) return '61-90'; return '90+'; }
