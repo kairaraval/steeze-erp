@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 981 · Comments: a new Table button in the note composer (leads, jobs, anywhere comments appear) lets you build a quick grid for size breakdowns or pricing. It posts as a real, readable table in the activity feed; add or remove rows and columns before inserting.";
+const BUILD = "Live build 982 · Cash Advance excess returns (Finance): the Liquidate/Cash Advance screen now has a proper return log — record full or PARTIAL returns, choose Cash on Hand or a Bank deposit, note who received it and a reference. Bank deposits post Dr Cash in Bank / Cr Cash on Hand automatically; cash stays in Cash on Hand. Full return history is kept, over-returning is blocked, and liquidation no longer auto-deposits the excess (deposit is now an explicit step). Budget Requests + a Cash-on-Hand monitoring report are the next step.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -47878,6 +47878,15 @@ function LiquidationModal({ ca, profile, bankAccounts, chartAccounts, costCenter
   const [exMethod,setExMethod]=useState(ca.excess_return_method||'bank_deposit');
   const [ovReim,setOvReim]=useState(ca.overexpense_reimbursed_at||null);
   const [ovMethod,setOvMethod]=useState(ca.overexpense_method||'bank_transfer');
+  // Structured excess-return log (Option B): partial returns, history, cash-vs-bank.
+  const [rets,setRets]=useState(Array.isArray(ca.returns)?ca.returns:[]);
+  const [retAmt,setRetAmt]=useState('');
+  const [retMethod,setRetMethod]=useState('cash_on_hand');
+  const [retBank,setRetBank]=useState('');
+  const [retRef,setRetRef]=useState('');
+  const [retBy,setRetBy]=useState(ca.custodian_name||'');
+  const [retBusy,setRetBusy]=useState(false);
+  const retTotal=rets.reduce((s,r)=>s+Number(r.amount||0),0);
   const receiptKind = (u)=> /\.pdf(\?|$)/i.test(String(u||'')) ? 'pdf' : 'image';
   const total = receipts.reduce((s,r)=>s+Number(r.amount||0), 0);
   const returned = Math.max(0, issued - total);   // excess / remaining
@@ -47926,13 +47935,9 @@ function LiquidationModal({ ca, profile, bankAccounts, chartAccounts, costCenter
     }
     setBusy(true); setMsg('');
     try {
-      if(returned > 0.01 && ca.bank_id){
-        await sb.from('bank_transactions').insert({
-          bank_id: ca.bank_id, date: todayManila(), direction:'in', amount: returned,
-          description: `Return from ${ca.number||'CA'} · ${ca.custodian_name||''}`,
-          ref_type:'cash_advance', ref_id: ca.id, created_by: profile.id,
-        });
-      }
+      // NOTE: the excess is no longer auto-deposited at liquidation. Any excess
+      // is recorded explicitly via "Record return" (cash kept on hand, or a bank
+      // deposit) so Finance can track partial returns and physical cash held.
       const { error } = await sb.from('cash_advances').update({
         receipts, supporting_docs:docs, amount_liquidated: total, amount_returned: returned,
         status: 'liquidated', liquidated_at: todayManila(), liq_approval:'approved',
@@ -47940,6 +47945,31 @@ function LiquidationModal({ ca, profile, bankAccounts, chartAccounts, costCenter
       if(error) throw error;
       setBusy(false); onSaved();
     } catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  // Record an excess-cash return (partial allowed). Cash returns stay in Cash on
+  // Hand (already reflected under the Cash-on-Hand model); bank deposits post a
+  // bank-in transaction (Dr Cash in Bank / Cr Cash on Hand via the GL projection).
+  async function recordReturn(){
+    const remaining = Math.max(0, returned - retTotal);
+    const amt = Number(retAmt) || remaining;
+    if(amt<=0){ setMsg('Enter an amount to return.'); return; }
+    if(amt > remaining + 0.01){ setMsg(`Can't return ${peso(amt)} — only ${peso(remaining)} excess remains.`); return; }
+    if(retMethod==='bank_deposit' && !retBank){ setMsg('Pick the bank the cash was deposited to.'); return; }
+    setRetBusy(true); setMsg('');
+    try{
+      const jvRef = `RET-${ca.number||'CA'}-${rets.length+1}`;
+      const entry = { amount: pRound(amt), date: todayManila(), method: retMethod, bank_id: retMethod==='bank_deposit'?retBank:null, received_by: retBy||null, reference: retRef||null, jv_ref: jvRef, by: profile.id, at: new Date().toISOString() };
+      if(retMethod==='bank_deposit'){
+        await sb.from('bank_transactions').insert({ bank_id: retBank, date: todayManila(), direction:'in', amount: pRound(amt), description: `Excess return · ${ca.number||'CA'} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id: ca.id, created_by: profile.id });
+      }
+      const next = [...rets, entry];
+      const fully = (retTotal + amt) >= returned - 0.01;
+      const patch = { returns: next };
+      if(fully){ patch.excess_returned_at = new Date().toISOString(); patch.excess_return_method = retMethod; }
+      await sb.from('cash_advances').update(patch).eq('id', ca.id);
+      setRets(next); setRetAmt(''); setRetRef(''); if(fully) setExRet(patch.excess_returned_at);
+    }catch(e){ setMsg('Return failed: '+(e.message||e)); }
+    setRetBusy(false);
   }
   return (
     <Modal title={`${isLiquidated?'Cash Advance':'Liquidate'} ${ca.number||'CA'}`} onClose={onClose} xwide>
@@ -47994,18 +48024,42 @@ function LiquidationModal({ ca, profile, bankAccounts, chartAccounts, costCenter
             {overExpense>0.01 && <div className="flex justify-between text-rose-700"><span>Over-expense (custodian paid)</span><span className="font-bold">{peso(overExpense)}</span></div>}
             {returned<0.01 && overExpense<0.01 && <div className="flex justify-between text-emerald-700"><span>Fully liquidated</span><span className="font-bold">✓</span></div>}
           </div>
-          {/* Excess returned/deposited status */}
-          {returned>0.01 && (
-            <div className="border rounded-lg p-3 bg-blue-50/50 border-blue-200 text-xs space-y-1.5">
-              <div className="font-semibold text-blue-800">Excess cash: {peso(returned)}</div>
-              {exRet ? <div className="text-emerald-700">✓ Returned/deposited to bank on {fmtDate(String(exRet).slice(0,10))}{ca.excess_return_method?` · ${ca.excess_return_method.replace('_',' ')}`:''}</div>
-                : canEdit ? <div className="space-y-1.5">
-                    <div className="text-slate-500">Not yet marked returned.</div>
-                    <select value={exMethod} onChange={e=>setExMethod(e.target.value)} className="input text-xs"><option value="bank_deposit">Bank deposit</option><option value="bank_transfer">Bank transfer</option><option value="cash_on_hand">Returned to petty cash / on hand</option></select>
-                    <button onClick={()=>{ const now=new Date().toISOString(); setStatus({ excess_returned_at:now, excess_return_method:exMethod }, ()=>setExRet(now)); }} className="w-full py-1.5 rounded-lg bg-blue-600 text-white font-semibold">Mark returned/deposited</button>
-                  </div> : <div className="text-slate-500">Awaiting return.</div>}
+          {/* Excess cash return — structured log, partial returns allowed */}
+          {(returned>0.01 || rets.length>0) && (()=>{ const remaining=Math.max(0,returned-retTotal); return (
+            <div className="border rounded-lg p-3 bg-blue-50/50 border-blue-200 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-blue-800">Excess cash: {peso(returned)}</div>
+                {retTotal>0.01 && <div className="text-emerald-700 font-semibold">Returned: {peso(retTotal)}</div>}
+              </div>
+              {exRet && rets.length===0 && <div className="text-emerald-700">✓ Previously marked returned/deposited on {fmtDate(String(exRet).slice(0,10))}{ca.excess_return_method?` · ${String(ca.excess_return_method).replace('_',' ')}`:''}</div>}
+              {!(exRet && rets.length===0) && (remaining>0.01 ? <div className="text-slate-600">Remaining to return: <span className="font-semibold">{peso(remaining)}</span></div>
+                : rets.length>0 ? <div className="text-emerald-700 font-semibold">✓ Fully returned</div> : null)}
+              {rets.length>0 && (
+                <div className="space-y-1 border-t border-blue-200 pt-1.5">
+                  {rets.map((r,i)=>(
+                    <div key={i} className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600 truncate">{fmtDate(String(r.date).slice(0,10))} · {r.method==='bank_deposit'?`🏦 ${(bankAccounts||[]).find(b=>b.id===r.bank_id)?.bank_name||'Bank'}`:'💵 Cash on hand'}{r.received_by?` · ${r.received_by}`:''}{r.reference?` · ${r.reference}`:''}</span>
+                      <span className="font-semibold whitespace-nowrap">{peso(r.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {canEdit && remaining>0.01 && !(exRet && rets.length===0) && (
+                <div className="space-y-1.5 border-t border-blue-200 pt-2">
+                  <input type="number" value={retAmt} onChange={e=>setRetAmt(e.target.value)} placeholder={`Amount (max ${peso(remaining)})`} className="input text-xs w-full" />
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <select value={retMethod} onChange={e=>setRetMethod(e.target.value)} className="input text-xs"><option value="cash_on_hand">💵 Cash on hand</option><option value="bank_deposit">🏦 Bank deposit</option></select>
+                    {retMethod==='bank_deposit'
+                      ? <select value={retBank} onChange={e=>setRetBank(e.target.value)} className="input text-xs"><option value="">— bank —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>
+                      : <input value={retBy} onChange={e=>setRetBy(e.target.value)} placeholder="Received by" className="input text-xs" />}
+                  </div>
+                  <input value={retRef} onChange={e=>setRetRef(e.target.value)} placeholder="Reference / deposit slip (optional)" className="input text-xs w-full" />
+                  <button onClick={recordReturn} disabled={retBusy} className="w-full py-1.5 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-50">{retBusy?'Recording…':'＋ Record return'}</button>
+                  <div className="text-[10px] text-slate-500">Cash returns stay in Cash on Hand; bank deposits post Dr Cash in Bank / Cr Cash on Hand.</div>
+                </div>
+              )}
             </div>
-          )}
+          ); })()}
           {/* Over-expense reimbursement status */}
           {overExpense>0.01 && (
             <div className="border rounded-lg p-3 bg-rose-50/50 border-rose-200 text-xs space-y-1.5">
