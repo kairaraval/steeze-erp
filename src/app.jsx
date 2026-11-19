@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 984 · New Finance module — Other Collections (non-sales cash receipts): record money from scrap (kalakal), used machinery, equipment disposal and misc. It recognizes Accounts Receivable – Others and clears it as payments (cash or bank) come in, with partial payments, status tracking, and automatic General Ledger posting. Note for asset disposals: book carrying value, depreciation and gain/loss via a Journal Entry — proceeds aren't all income.";
+const BUILD = "Live build 985 · Cash payments can now pick a deposit bank: on every sales-payment screen (log, multi-order, verify, edit), a CASH payment can choose which bank account the cash was/will be deposited to — it then posts to that Cash in Bank. Leave it blank to keep it as Cash on Hand. (Previously cash defaulted into one bank automatically.)";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -38092,7 +38092,7 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
       const { error } = await sb.from('sales_order_payments').insert({
         sales_order_id: so.id, date: f.date, amount: amt,
         method: f.is_cwt ? 'others' : f.method, reference: f.reference||null, notes: f.notes||null,
-        bank_id: (!f.is_cwt && f.method==='bank_transfer') ? (f.bank_id||null) : null,
+        bank_id: (!f.is_cwt && (f.method==='bank_transfer'||f.method==='cash')) ? (f.bank_id||null) : null,
         is_cwt: !!f.is_cwt,
         attachment_url, attachment_path, attachments: atts,
         status: 'pending', received_by: profile.id,
@@ -38139,10 +38139,10 @@ function SalesOrderLogPaymentModal({ so, profile, profiles, bankAccounts, onClos
           </TpLbl>
           <TpLbl t="Reference #"><input className="input w-full" placeholder={f.method==='check'?'Check #':f.method==='gcash'?'GCash ref #':'Deposit slip / Ref #'} value={f.reference} onChange={e=>up('reference',e.target.value)} /></TpLbl>
         </div>
-        {f.method==='bank_transfer' && (
-          <TpLbl t="Deposited to which bank? *">
+        {(f.method==='bank_transfer' || f.method==='cash') && (
+          <TpLbl t={f.method==='cash'?'Deposit to which bank? (where the cash will go)':'Deposited to which bank? *'}>
             <select className="input w-full" value={f.bank_id} onChange={e=>up('bank_id',e.target.value)}>
-              <option value="">— Select bank —</option>
+              <option value="">{f.method==='cash'?'— kept as Cash on Hand —':'— Select bank —'}</option>
               {(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}{b.account_number?` · ${b.account_number}`:''}</option>)}
             </select>
           </TpLbl>
@@ -38209,7 +38209,7 @@ function SOBatchPaymentModal({ salesOrders, clients, profile, profiles, bankAcco
       const mentionIds=(profiles||[]).filter(p=>['accounting','admin','accounting_officer'].includes(p.role) && p.id!==profile.id).map(p=>p.id);
       for(const id of selectedIds){
         const amt=Number(sel[id])||0;
-        const { error }=await sb.from('sales_order_payments').insert({ sales_order_id:id, date:f.date, amount:amt, method:f.method, reference:f.reference||null, notes:f.notes||null, bank_id:f.method==='bank_transfer'?(f.bank_id||null):null, attachments:atts, attachment_url, attachment_path, status:'pending', received_by:profile.id });
+        const { error }=await sb.from('sales_order_payments').insert({ sales_order_id:id, date:f.date, amount:amt, method:f.method, reference:f.reference||null, notes:f.notes||null, bank_id:(f.method==='bank_transfer'||f.method==='cash')?(f.bank_id||null):null, attachments:atts, attachment_url, attachment_path, status:'pending', received_by:profile.id });
         if(error) throw error;
         try{ await sb.from('sales_order_activity').insert({ sales_order_id:id, actor_id:profile.id, type:'system', mentions:mentionIds, text:`📩 Logged a ${payMethodLabel(f.method)} payment of ${peso(amt)}${f.reference?` (ref ${f.reference})`:''} — part of a multi-order payment, pending verification.` }); }catch(_){}
       }
@@ -38223,10 +38223,10 @@ function SOBatchPaymentModal({ salesOrders, clients, profile, profiles, bankAcco
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <TpLbl t="Date"><input type="date" className="input" value={f.date} onChange={e=>up('date',e.target.value)} /></TpLbl>
           <TpLbl t="Method"><select className="input" value={f.method} onChange={e=>up('method',e.target.value)}>{PAYMENT_METHOD_OPTIONS.map(m=><option key={m.value} value={m.value}>{m.label}</option>)}</select></TpLbl>
-          {f.method==='bank_transfer'
-            ? <TpLbl t="Deposited to bank *"><select className="input" value={f.bank_id||''} onChange={e=>up('bank_id',e.target.value||null)}><option value="">—</option>{bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
+          {(f.method==='bank_transfer'||f.method==='cash')
+            ? <TpLbl t={f.method==='cash'?'Deposit to bank':'Deposited to bank *'}><select className="input" value={f.bank_id||''} onChange={e=>up('bank_id',e.target.value||null)}><option value="">{f.method==='cash'?'— kept as Cash on Hand —':'—'}</option>{bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
             : <TpLbl t="Reference #"><input className="input" value={f.reference} onChange={e=>up('reference',e.target.value)} placeholder="OR / txn #" /></TpLbl>}
-          {f.method==='bank_transfer' && <TpLbl t="Reference #"><input className="input" value={f.reference} onChange={e=>up('reference',e.target.value)} placeholder="Bank ref / confirmation #" /></TpLbl>}
+          {(f.method==='bank_transfer'||f.method==='cash') && <TpLbl t="Reference #"><input className="input" value={f.reference} onChange={e=>up('reference',e.target.value)} placeholder="OR / deposit slip / ref #" /></TpLbl>}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-500">Client:</span>
@@ -38313,7 +38313,7 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
       // 1) Create bank transaction (for non-cash). Cash deposits + CWT (BIR 2307,
       //    non-cash settlement) don't create a bank txn here.
       let bankTxId = null;
-      if(!payment.is_cwt && method !== 'cash' && bankId){
+      if(!payment.is_cwt && bankId){
         const { data: btx, error: btErr } = await insertBankTxnOnce({
           bank_id: bankId, date: payDate, direction: 'in', amount: amt,
           description: `Payment from ${so.client_name||''} for ${so.number}`,
@@ -38343,7 +38343,7 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
       const { error: pErr } = await sb.from('sales_order_payments').update({
         amount: amt,
         method, reference: reference||null, date: payDate,
-        bank_id: (payment.is_cwt || method==='cash') ? null : bankId,
+        bank_id: payment.is_cwt ? null : (bankId||null),
         bank_transaction_id: bankTxId,
         bank_charge_amount: diff > 0 ? diff : 0,
         status: 'verified',
@@ -38440,14 +38440,14 @@ function SalesOrderVerifyPaymentModal({ payment, so, profile, bankAccounts, onCl
             <TpLbl t="Verified amount (what hit the bank) *"><input type="number" className="input font-bold" value={verifyAmount} onChange={e=>setVerifyAmount(e.target.value)} /></TpLbl>
             <TpLbl t="Date received"><input type="date" className="input" value={payDate} onChange={e=>setPayDate(e.target.value)} /></TpLbl>
             <TpLbl t="Payment method">
-              <select className="input" value={method} onChange={e=>{ setMethod(e.target.value); if(e.target.value==='cash') setBankId(null); }}>
+              <select className="input" value={method} onChange={e=>{ setMethod(e.target.value); }}>
                 {PAYMENT_METHOD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </TpLbl>
             <TpLbl t="Reference #"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder={method==='check'?'Check #':method==='gcash'?'GCash ref #':'Deposit slip / Ref #'} /></TpLbl>
-            <TpLbl t={`Destination bank ${method==='cash'?'(N/A for cash)':'*'}`}>
-              <select className="input" value={bankId||''} disabled={method==='cash'} onChange={e=>setBankId(e.target.value||null)}>
-                <option value="">—</option>
+            <TpLbl t={method==='cash'?'Deposit to bank (where the cash went)':'Destination bank *'}>
+              <select className="input" value={bankId||''} onChange={e=>setBankId(e.target.value||null)}>
+                <option value="">{method==='cash'?'— kept as Cash on Hand —':'—'}</option>
                 {(bankAccounts||[]).map(b => <option key={b.id} value={b.id}>{b.bank_name}</option>)}
               </select>
             </TpLbl>
@@ -38518,19 +38518,20 @@ function SalesOrderEditPaymentModal({ payment, so, profile, bankAccounts, onClos
     try {
       let bankTxId = payment.bank_transaction_id || null;
       if(isVerified){
-        if(method!=='cash' && bankId){
+        if(bankId){
           if(bankTxId){
             await sb.from('bank_transactions').update({ bank_id:bankId, date, amount:amt, reference_number:reference||null, description:`Payment from ${so.client_name||''} for ${so.number}` }).eq('id', bankTxId);
           } else {
             const { data:btx, error:be } = await insertBankTxnOnce({ bank_id:bankId, date, direction:'in', amount:amt, description:`Payment from ${so.client_name||''} for ${so.number}`, ref_type:'sales_order', ref_id:so.id, reference_number:reference||null, created_by:profile.id });
             if(be) throw be; bankTxId=btx.id;
           }
-        } else if(method==='cash' && bankTxId){
+        } else if(!bankId && bankTxId){
+          // No deposit bank (kept as Cash on Hand) — remove any prior bank entry.
           try { await sb.from('bank_transactions').delete().eq('id', bankTxId); } catch(_){}
           bankTxId=null;
         }
       }
-      const { error:pe } = await sb.from('sales_order_payments').update({ amount:amt, method, reference:reference||null, date, bank_id:method==='cash'?null:bankId, bank_transaction_id:bankTxId }).eq('id', payment.id);
+      const { error:pe } = await sb.from('sales_order_payments').update({ amount:amt, method, reference:reference||null, date, bank_id:bankId||null, bank_transaction_id:bankTxId }).eq('id', payment.id);
       if(pe) throw pe;
       await recomputeSO();
       try { await sb.from('sales_order_activity').insert({ sales_order_id:so.id, actor_id:profile.id, type:'system', text:`✎ Payment edited — ${peso(amt)} · ${payMethodLabel(method)}${reference?` · ${reference}`:''}` }); } catch(_){}
@@ -38572,12 +38573,12 @@ function SalesOrderEditPaymentModal({ payment, so, profile, bankAccounts, onClos
           <TpLbl t="Date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <TpLbl t="Method"><select className="input" value={method} onChange={e=>{ setMethod(e.target.value); if(e.target.value==='cash') setBankId(null); else if(!bankId) setBankId(bankAccounts[0]?.id||null); }}>{PAYMENT_METHOD_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></TpLbl>
+          <TpLbl t="Method"><select className="input" value={method} onChange={e=>{ setMethod(e.target.value); if(e.target.value!=='cash' && !bankId) setBankId(bankAccounts[0]?.id||null); }}>{PAYMENT_METHOD_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></TpLbl>
           <TpLbl t="Reference #"><input className="input" value={reference} onChange={e=>setReference(e.target.value)} placeholder="Ref / deposit slip / check #" /></TpLbl>
         </div>
-        <TpLbl t={`Bank / wallet ${method==='cash'?'(N/A for cash)':'*'}`}>
-          <select className="input" value={bankId||''} disabled={method==='cash'} onChange={e=>setBankId(e.target.value||null)}>
-            <option value="">—</option>
+        <TpLbl t={method==='cash'?'Deposit to bank (where the cash went)':'Bank / wallet *'}>
+          <select className="input" value={bankId||''} onChange={e=>setBankId(e.target.value||null)}>
+            <option value="">{method==='cash'?'— kept as Cash on Hand —':'—'}</option>
             {bankAccounts.map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}
           </select>
         </TpLbl>
@@ -49164,7 +49165,9 @@ function buildGLPostings(data){
     if(p.is_cwt){
       push(dt, '101012', amt, 0, 'CWT', p.reference||'', 'Creditable withholding tax (BIR 2307)', null, 'so_payment', p.id);
     } else {
-      const cc=cashCodeFor(p.bank_id);
+      // Deposit bank chosen → that Cash in Bank. Cash with no bank yet → Cash on
+      // Hand. Other non-cash with no bank → default bank (legacy behavior).
+      const cc = p.bank_id ? cashCodeFor(p.bank_id) : (p.method==='cash' ? CASH_HAND : cashCodeFor(null));
       push(dt, cc, amt, 0, 'AR', p.reference||'', 'Collection', null, 'so_payment', p.id);
     }
     push(dt, '101008', 0, amt, 'AR', p.reference||'', p.is_cwt?'CWT applied vs receivable':'Applied vs receivable', null, 'so_payment', p.id);
