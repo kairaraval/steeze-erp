@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 990 · New: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 991 · Fix: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -56200,9 +56200,21 @@ function App(){
         // reload RUN_BUILD == dep, so this stops on its own.
         if(dep>RUN_BUILD){
           let reloadedFor=0; try{ reloadedFor=Number(sessionStorage.getItem('autoReloadBuild')||0); }catch(_){}
-          if(dep>reloadedFor && !recentlyTyped(20000)){
-            try{ sessionStorage.setItem('autoReloadBuild', String(dep)); }catch(_){}
-            setTimeout(()=>{ try{ window.location.reload(); }catch(_){} }, 2500);
+          // NEVER auto-reload while a modal/form is open — that would wipe an
+          // unsaved form mid-edit (e.g. a payment request being filled out) and
+          // look like "the page refreshed and my submission didn't go through".
+          // We don't stamp sessionStorage in that case, so the reload can still
+          // happen later once the modal is closed.
+          const modalOpen = (()=>{ try{ return !!document.querySelector('.steeze-modal-backdrop'); }catch(_){ return false; } })();
+          if(dep>reloadedFor && !recentlyTyped(20000) && !modalOpen){
+            setTimeout(()=>{
+              // Final guard: a modal may have opened, or typing resumed, in the
+              // 2.5s window. If so, skip this cycle entirely (don't stamp), so it
+              // retries cleanly on the next check once the form is closed.
+              if(document.querySelector('.steeze-modal-backdrop') || recentlyTyped(20000)) return;
+              try{ sessionStorage.setItem('autoReloadBuild', String(dep)); }catch(_){}
+              try{ window.location.reload(); }catch(_){}
+            }, 2500);
           }
         }
       }catch(_){}
