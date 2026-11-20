@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 988 · New: Commission payout adjustments. On the end-of-month payout panel, each rep now has a '± Adjust' button to add or deduct a manual amount (e.g. a commission was paid but the project fell through — deduct it). Pending adjustments show on the rep's row, net out against their commissions, and are settled onto the same voucher when you generate the payout. A deduction larger than the commissions in that payout simply carries to the next one.";
+const BUILD = "Live build 989 · New: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -36328,7 +36328,7 @@ function nextPONumber(allOrders, dateStr){
   return `PO-${dateStr}-${String(n).padStart(3,'0')}`;
 }
 
-function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, leads, clients, reload, openFromPR, onClearPR }){
+function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, leads, clients, reload, openFromPR, onClearPR, onReturn }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [receiving,setReceiving]=useState(null); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
   // Delete (soft-delete) is ADMIN-ONLY. Purchasing / Purchasing Admin can CANCEL
   // a PO instead — keeps the record, just marks it Cancelled.
@@ -36425,7 +36425,7 @@ function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, reque
               ) : <span className="text-xs text-slate-300">—</span>}
               {!isPaid && o.expected_pay_date && <div className={`text-[10px] mt-0.5 ${o.expected_pay_date<todayManila()?'text-rose-600 font-semibold':'text-slate-400'}`}>pay by {fmtDate(o.expected_pay_date)}{o.payment_terms?` · ${o.payment_terms}`:''}</div>}
             </td>
-            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{canCancel && o.status==='draft' && <button onClick={(e)=>{e.stopPropagation(); returnToQueue(o);}} className="text-xs text-indigo-600 hover:underline mr-2" title="Undo this draft PO — its items go back to the Materials Queue">↩ To Queue</button>}{canCancel && !['cancelled','received'].includes(o.status) && <button onClick={(e)=>{e.stopPropagation(); cancelPO(o);}} className="text-xs text-amber-600 hover:underline mr-2" title="Cancel (keeps the record)">Cancel</button>}{canDelete && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Delete (admin only)">Delete</button>}</td>
+            <td className="px-3 py-2 text-right whitespace-nowrap"><button onClick={(e)=>{e.stopPropagation(); setPrinting(o);}} className="text-xs text-slate-500 hover:text-slate-800 mr-2" title="Print preview">🖨</button><button onClick={(e)=>{e.stopPropagation(); setEditing(o);}} className="text-xs text-indigo-600 hover:underline mr-2">Open</button>{(o.status==='open'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); setReceiving(o);}} className="text-xs text-emerald-600 hover:underline mr-2">↓ Receive</button>}{onReturn && (o.status==='received'||o.status==='partial') && <button onClick={(e)=>{e.stopPropagation(); onReturn(o);}} className="text-xs text-rose-600 hover:underline mr-2" title="Return goods from this PO to the supplier">↩ Return</button>}{canCancel && o.status==='draft' && <button onClick={(e)=>{e.stopPropagation(); returnToQueue(o);}} className="text-xs text-indigo-600 hover:underline mr-2" title="Undo this draft PO — its items go back to the Materials Queue">↩ To Queue</button>}{canCancel && !['cancelled','received'].includes(o.status) && <button onClick={(e)=>{e.stopPropagation(); cancelPO(o);}} className="text-xs text-amber-600 hover:underline mr-2" title="Cancel (keeps the record)">Cancel</button>}{canDelete && <button onClick={(e)=>{e.stopPropagation(); deletePO(o);}} className="text-xs text-rose-500 hover:underline" title="Delete (admin only)">Delete</button>}</td>
           </tr>
         ); })}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No purchase orders yet. Click "+ New PO" or convert an approved PR.</td></tr>}</tbody>
       </table></div></div>
@@ -49327,7 +49327,7 @@ function categoryToAccountCode(cat){
 // NOTE: this is a derived ledger for management + tax-prep. Revenue is
 // recognised on collection (cash basis). Review before filing.
 function buildGLPostings(data){
-  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[], salesOrders=[], rfps=[], otherCollections=[] } = data;
+  const { journalEntries=[], vouchers=[], expenses=[], bankTransactions=[], soPayments=[], bankAccounts=[], chartAccounts=[], cashAdvances=[], salesOrders=[], rfps=[], otherCollections=[], supplierReturns=[] } = data;
   const rfpById=new Map((rfps||[]).map(r=>[r.id,r]));
   const nameOf=(code)=> (chartAccounts.find(a=>a.code===code)?.name)||code;
   const P=[];
@@ -49468,6 +49468,20 @@ function buildGLPostings(data){
       push(p.date||c.date, acct, pa, 0, 'OC', c.number, 'Collection received', null, 'other_collection', c.id);
       push(p.date||c.date, '101016', 0, pa, 'OC', c.number, 'Cleared AR – Others', null, 'other_collection', c.id);
     });
+  });
+  // OC2. Returns to supplier (purchase returns). Only CASH-REFUND returns post:
+  // the goods go back and money comes in, reversing the original purchase —
+  //   Dr Cash in Bank / Cash on Hand (refund received)
+  //   Cr <purchase expense account> (default 401050 COGS - Raw Materials)
+  // CREDIT-settled returns are a note only (no cash moved, applied manually to a
+  // future PO), so they are intentionally NOT projected here.
+  (supplierReturns||[]).filter(r=>!r.deleted_at && r.settlement==='refund').forEach(r=>{
+    const amt=Number(r.total)||0; if(amt<=0) return;
+    const dt=(r.refund_received_at||r.date||'').slice(0,10);
+    const cashCode = r.bank_id ? cashCodeFor(r.bank_id) : CASH_HAND;
+    const expCode = r.gl_account_code || '401050';
+    push(dt, cashCode, amt, 0, 'RET', r.number||'', `Refund — return to ${r.supplier_name||'supplier'}`, null, 'supplier_return', r.id);
+    push(dt, expCode, 0, amt, 'RET', r.number||'', 'Purchase return (reversed)', null, 'supplier_return', r.id);
   });
   return P;
 }
@@ -49627,8 +49641,218 @@ function OtherCollectionModal({ row, profile, chartAccounts, bankAccounts, canEd
     </Modal>
   );
 }
-function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections]);
+
+/* ─────────── RETURN TO SUPPLIER (purchase return / debit memo) ───────────
+   Log fabric/goods physically returned to a supplier. Two things happen:
+   1) Inventory — an 'out' stock movement per line reduces on-hand (the goods
+      leave us). items.qty is owned by the stock_movements DB trigger.
+   2) The money — the supplier either refunds cash (money comes back, posted in
+      the GL as Dr Cash/Bank · Cr the purchase expense, i.e. a purchase return)
+      or keeps it as a CREDIT for a future purchase (recorded as a note only;
+      Accounting applies it manually on the next PO/RFP).
+   This replaces the old hack of entering a negative line on a purchase.        */
+function ReturnToSupplierModal({ po, suppliers, items, bankAccounts, chartAccounts, profile, onClose, onSaved }){
+  const lockedSupplier = po ? (po.supplier_id||null) : null;
+  const initLines = po
+    ? (po.lines||[]).filter(l=>Number(l.qty_received||l.qty||0)>0).map(l=>({
+        item_id:l.item_id||null, description:l.description||'', qty:'', unit_cost:(l.unit_cost!=null?String(l.unit_cost):''),
+      }))
+    : [{ item_id:null, description:'', qty:'', unit_cost:'' }];
+  const [supplierId,setSupplierId]=useState(lockedSupplier);
+  const [date,setDate]=useState(todayManila());
+  const [lines,setLines]=useState(initLines.length?initLines:[{ item_id:null, description:'', qty:'', unit_cost:'' }]);
+  const [settlement,setSettlement]=useState('refund');  // 'refund' | 'credit'
+  const [bankId,setBankId]=useState('');
+  const [recvDate,setRecvDate]=useState(todayManila());
+  const [glCode,setGlCode]=useState('401050');
+  const [reason,setReason]=useState('');
+  const [notes,setNotes]=useState('');
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const itemOpts=(items||[]).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  // Expense / COGS accounts to reverse on refund (purchases). Default 401050.
+  const expenseOpts=(chartAccounts||[]).filter(a=>/^(40|50)/.test(String(a.code))).sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+  const lineTotal=(l)=> (Number(l.qty)||0)*(Number(l.unit_cost)||0);
+  const total=lines.reduce((s,l)=>s+lineTotal(l),0);
+  function setLine(i,k,v){ setLines(lines.map((l,j)=>j===i?{...l,[k]:v}:l)); }
+  function pickItem(i,id){ const it=(items||[]).find(x=>x.id===id); setLines(lines.map((l,j)=>j===i?{...l, item_id:id||null, description:l.description||(it?.name||''), unit_cost:(l.unit_cost||(it&&it.cost!=null?String(it.cost):''))}:l)); }
+  function addLine(){ setLines([...lines,{ item_id:null, description:'', qty:'', unit_cost:'' }]); }
+  function removeLine(i){ setLines(lines.filter((_,j)=>j!==i)); }
+  const supName=(id)=>(suppliers||[]).find(s=>s.id===id)?.company||'';
+  async function save(){
+    if(!supplierId){ setMsg('Pick the supplier the goods are going back to.'); return; }
+    const valid=lines.filter(l=>Number(l.qty)>0);
+    if(!valid.length){ setMsg('Add at least one line with a return quantity.'); return; }
+    if(settlement==='refund' && !bankId){ setMsg('Pick the bank/wallet that received the refund (or switch to Credit).'); return; }
+    setBusy(true); setMsg('');
+    try{
+      const monthKey=date.slice(0,7);
+      const { data:ex }=await sb.from('supplier_returns').select('number').like('number',`RET-${monthKey}-%`);
+      let max=0; (ex||[]).forEach(r=>{ const m=String(r.number||'').match(/-(\d+)$/); if(m){ const n=parseInt(m[1],10); if(n>max) max=n; } });
+      const number=`RET-${monthKey}-${String(max+1).padStart(3,'0')}`;
+      const outLines=valid.map(l=>({ item_id:l.item_id||null, description:(l.description||'').trim(), qty:Number(l.qty)||0, unit_cost:Number(l.unit_cost)||0, total:pRound(lineTotal(l)) }));
+      const payload={
+        number, date, supplier_id:supplierId, supplier_name:supName(supplierId)||null,
+        po_id: po?po.id:null, lines:outLines, total:pRound(total), settlement,
+        bank_id: settlement==='refund' ? (bankId||null) : null,
+        refund_received_at: settlement==='refund' ? new Date(recvDate).toISOString() : null,
+        gl_account_code: settlement==='refund' ? (glCode||'401050') : null,
+        reason: reason.trim()||null, notes: notes.trim()||null, created_by:profile.id,
+      };
+      const { data:ret, error }=await sb.from('supplier_returns').insert(payload).select('id').single();
+      if(error) throw error;
+      // Inventory: one 'out' movement per line that is linked to an item.
+      const movs=outLines.filter(l=>l.item_id).map(l=>({ item_id:l.item_id, type:'out', qty:l.qty, reason:`Return to supplier ${number}`, ref_type:'supplier_return', ref_id:ret.id, actor_id:profile.id, date }));
+      if(movs.length){ const { error:mErr }=await sb.from('stock_movements').insert(movs); if(mErr){ const stripped=movs.map(({date,...rest})=>rest); await sb.from('stock_movements').insert(stripped); } }
+      setBusy(false); onSaved && onSaved();
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  const acctName=(code)=>{ const a=(chartAccounts||[]).find(x=>String(x.code)===String(code)); return a?`${a.code} · ${a.name}`:code; };
+  const unlinkedCount=lines.filter(l=>Number(l.qty)>0 && !l.item_id).length;
+  return (
+    <Modal title={po?`↩ Return to supplier — from PO ${po.number||''}`:'↩ New return to supplier'} onClose={onClose} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Supplier *">
+            {lockedSupplier
+              ? <input className="input bg-slate-100" value={supName(supplierId)} disabled />
+              : <select className="input" value={supplierId||''} onChange={e=>setSupplierId(e.target.value||null)}><option value="">— pick supplier —</option>{(suppliers||[]).slice().sort((a,b)=>String(a.company||'').localeCompare(String(b.company||''))).map(s=><option key={s.id} value={s.id}>{s.company}</option>)}</select>}
+          </TpLbl>
+          <TpLbl t="Return date"><input type="date" className="input" value={date} onChange={e=>setDate(e.target.value)} /></TpLbl>
+        </div>
+
+        <div className="border border-slate-200 rounded-lg overflow-hidden">
+          <div className="bg-slate-50 px-3 py-1.5 text-[11px] uppercase tracking-wide font-semibold text-slate-500 flex justify-between"><span>Items returned</span><button onClick={addLine} className="text-indigo-600 hover:underline normal-case font-semibold">+ Add line</button></div>
+          <div className="divide-y">
+            {lines.map((l,i)=>(
+              <div key={i} className="p-2 grid grid-cols-12 gap-2 items-center">
+                <div className="col-span-5">
+                  <select className="input text-xs w-full" value={l.item_id||''} onChange={e=>pickItem(i,e.target.value)}>
+                    <option value="">— inventory item (optional) —</option>
+                    {itemOpts.map(it=><option key={it.id} value={it.id}>{it.name}{it.color?' · '+it.color:''}{it.unit?` (${it.unit})`:''}</option>)}
+                  </select>
+                  <input className="input text-xs w-full mt-1" value={l.description} onChange={e=>setLine(i,'description',e.target.value)} placeholder="Description" />
+                </div>
+                <div className="col-span-2"><input type="number" className="input text-xs text-right" value={l.qty} onChange={e=>setLine(i,'qty',e.target.value)} placeholder="Qty" /></div>
+                <div className="col-span-2"><input type="number" className="input text-xs text-right" value={l.unit_cost} onChange={e=>setLine(i,'unit_cost',e.target.value)} placeholder="Unit ₱" /></div>
+                <div className="col-span-2 text-right text-xs font-semibold">{peso(lineTotal(l))}</div>
+                <div className="col-span-1 text-right"><button onClick={()=>removeLine(i)} className="text-rose-400 hover:text-rose-600 text-sm">✕</button></div>
+              </div>
+            ))}
+          </div>
+          <div className="bg-slate-50 px-3 py-1.5 flex justify-between text-sm font-bold border-t"><span>Total return value</span><span>{peso(total)}</span></div>
+        </div>
+        {unlinkedCount>0 && <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">⚠ {unlinkedCount} line{unlinkedCount===1?'':'s'} not linked to an inventory item — on-hand stock won't change for {unlinkedCount===1?'it':'those'}. Link an item if the stock should drop.</div>}
+
+        <div>
+          <div className="text-[11px] uppercase tracking-wide font-semibold text-slate-500 mb-1">How is the supplier settling this?</div>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={()=>setSettlement('refund')} className={`px-3 py-2 rounded-lg text-sm font-semibold border ${settlement==='refund'?'bg-emerald-600 text-white border-emerald-600':'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>💵 Refund (money back)</button>
+            <button onClick={()=>setSettlement('credit')} className={`px-3 py-2 rounded-lg text-sm font-semibold border ${settlement==='credit'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>🧾 Credit (next purchase)</button>
+          </div>
+        </div>
+
+        {settlement==='refund' ? (
+          <div className="grid grid-cols-2 gap-2">
+            <TpLbl t="Refund received in *"><select className="input" value={bankId} onChange={e=>setBankId(e.target.value)}><option value="">— bank / wallet —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select></TpLbl>
+            <TpLbl t="Date received"><input type="date" className="input" value={recvDate} onChange={e=>setRecvDate(e.target.value)} /></TpLbl>
+            <TpLbl t="Account to reverse (purchase)"><select className="input" value={glCode} onChange={e=>setGlCode(e.target.value)}>{expenseOpts.length?expenseOpts.map(a=><option key={a.code} value={a.code}>{a.code} · {a.name}</option>):<option value="401050">401050 · COGS - Raw Materials</option>}</select></TpLbl>
+          </div>
+        ) : (
+          <div className="text-[11px] text-slate-600 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
+            Recorded as a <b>supplier credit</b> of {peso(total)} with {supName(supplierId)||'this supplier'}. This is a note for now — when you place the next PO/RFP with them, Accounting applies the credit manually to reduce what you pay. No cash or GL entry is posted today.
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <TpLbl t="Reason"><input className="input" value={reason} onChange={e=>setReason(e.target.value)} placeholder="e.g. wrong color / defective / over-delivery" /></TpLbl>
+          <TpLbl t="Notes"><input className="input" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="optional" /></TpLbl>
+        </div>
+
+        {settlement==='refund' && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
+            On save: on-hand drops for the linked items, and the refund posts <b>Dr {bankId?((bankAccounts||[]).find(b=>b.id===bankId)?.bank_name||'Cash in Bank'):'Cash in Bank'}</b> / <b>Cr {acctName(glCode)}</b> for {peso(total)} (a purchase return).
+          </div>
+        )}
+        {msg && <div className="text-xs text-rose-600">{msg}</div>}
+        <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':`Record return — ${peso(total)}`}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function SupplierReturnsView({ profile, profiles, suppliers, items, orders, bankAccounts, chartAccounts, supplierReturns, reload, openPO, onClearPO }){
+  const [open,setOpen]=useState(null);        // 'new' | po-object
+  const [search,setSearch]=useState('');
+  const canEdit = ['admin','accounting','accounting_officer','purchasing','purchasing_admin','purchasing_personnel'].includes(profile.role);
+  const live=(supplierReturns||[]).filter(r=>!r.deleted_at);
+  // Open the modal prefilled from a PO when asked (button on PO list hands it here).
+  useEffect(()=>{ if(openPO){ setOpen(openPO); onClearPO && onClearPO(); } },[openPO&&openPO.id]);
+  const supName=(id)=>(suppliers||[]).find(s=>s.id===id)?.company||'';
+  const poNum=(id)=>(orders||[]).find(o=>o.id===id)?.number||'';
+  const q=search.trim().toLowerCase();
+  const rows=live.filter(r=>!q || [r.number, r.supplier_name||supName(r.supplier_id), r.reason, poNum(r.po_id), (r.lines||[]).map(l=>l.description).join(' ')].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const totRefund=live.filter(r=>r.settlement==='refund').reduce((s,r)=>s+Number(r.total||0),0);
+  const openCredit=live.filter(r=>r.settlement==='credit' && !r.credit_used_at).reduce((s,r)=>s+Number(r.total||0),0);
+  async function markCreditUsed(r){
+    const note=prompt('Note how this credit was used (e.g. applied to PO-2026-11-012):','');
+    if(note===null) return;
+    const { error }=await sb.from('supplier_returns').update({ credit_used_at:new Date().toISOString(), credit_used_note:note||null }).eq('id',r.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
+  async function unmarkCredit(r){
+    const { error }=await sb.from('supplier_returns').update({ credit_used_at:null, credit_used_note:null }).eq('id',r.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
+  async function del(r){
+    if(!confirm(`Delete return ${r.number||''}?\n\nThis removes the record. It does NOT automatically put the returned stock back on-hand — adjust inventory manually if needed.`)) return;
+    const { error }=await sb.from('supplier_returns').update({ deleted_at:new Date().toISOString(), deleted_by:profile.id }).eq('id',r.id);
+    if(error){ alert(error.message); return; } reload && reload();
+  }
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">↩ Returns to Supplier</h1><p className="text-slate-500 text-sm">Fabric/goods sent back to suppliers · refunds &amp; credits · {live.length} return{live.length===1?'':'s'}</p></div>
+          {canEdit && <button onClick={()=>setOpen('new')} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">+ New return</button>}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 mb-4 max-w-md">
+        <div className="rounded-xl border bg-white p-4"><div className="text-[11px] uppercase text-slate-400">Refunded (lifetime)</div><div className="text-2xl font-bold text-emerald-700">{peso(totRefund)}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[11px] uppercase text-slate-400">Open supplier credit</div><div className="text-2xl font-bold text-indigo-700">{peso(openCredit)}</div></div>
+      </div>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search return#, supplier, item, reason…" className="px-3 py-2 text-sm rounded-lg border border-slate-300 w-80 mb-4" />
+      <div className="bg-white rounded-xl border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Return#</th><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">From PO</th><th className="text-right px-3 py-2">Value</th><th className="text-left px-3 py-2">Settlement</th><th className="text-left px-3 py-2">Reason</th><th></th></tr></thead>
+        <tbody>{rows.map(r=>(
+          <tr key={r.id} className="border-t hover:bg-slate-50">
+            <td className="px-3 py-2 font-mono text-xs">{r.number||r.id.slice(0,6)}</td>
+            <td className="px-3 py-2 text-xs">{fmtDate(r.date)}</td>
+            <td className="px-3 py-2">{r.supplier_name||supName(r.supplier_id)||'—'}</td>
+            <td className="px-3 py-2 font-mono text-xs text-slate-500">{poNum(r.po_id)||'—'}</td>
+            <td className="px-3 py-2 text-right font-semibold">{peso(r.total)}</td>
+            <td className="px-3 py-2">
+              {r.settlement==='refund'
+                ? <span className="text-xs px-2 py-1 rounded font-semibold bg-emerald-100 text-emerald-700">💵 Refunded{r.bank_id?` · ${(bankAccounts||[]).find(b=>b.id===r.bank_id)?.bank_name||''}`:''}</span>
+                : (r.credit_used_at
+                    ? <span className="text-xs px-2 py-1 rounded font-semibold bg-slate-200 text-slate-600" title={r.credit_used_note||''}>🧾 Credit · used</span>
+                    : <span className="text-xs px-2 py-1 rounded font-semibold bg-indigo-100 text-indigo-700">🧾 Credit · open</span>)}
+            </td>
+            <td className="px-3 py-2 text-xs text-slate-500">{r.reason||'—'}</td>
+            <td className="px-3 py-2 text-right whitespace-nowrap">
+              {canEdit && r.settlement==='credit' && !r.credit_used_at && <button onClick={()=>markCreditUsed(r)} className="text-xs text-indigo-600 hover:underline mr-2" title="Mark this credit as applied to a later purchase">Mark used</button>}
+              {canEdit && r.settlement==='credit' && r.credit_used_at && <button onClick={()=>unmarkCredit(r)} className="text-xs text-slate-500 hover:underline mr-2">Reopen</button>}
+              {canEdit && <button onClick={()=>del(r)} className="text-xs text-rose-500 hover:underline">Delete</button>}
+            </td>
+          </tr>
+        ))}{rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">No returns logged yet.</td></tr>}</tbody>
+      </table></div></div>
+      {open && <ReturnToSupplierModal po={open==='new'?null:open} suppliers={suppliers} items={items} bankAccounts={bankAccounts} chartAccounts={chartAccounts} profile={profile} onClose={()=>setOpen(null)} onSaved={()=>{ setOpen(null); reload && reload(); }} />}
+    </div>
+  );
+}
+
+function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns]);
   const years = finReportYears(postings);
   const [year,setYear]=useState('all');
   const [sel,setSel]=useState(null); // account code drilled into
@@ -49881,8 +50105,8 @@ function MonthEndClosePanel({ month, profile, profiles, bankAccounts, costCenter
   );
 }
 function monLabelOf(m){ try{ const [y,mo]=String(m).split('-'); return new Date(Number(y),Number(mo)-1,1).toLocaleDateString('en-PH',{month:'long',year:'numeric'}); }catch(_){ return m; } }
-function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles, apVouchers, rfps, otherCollections, reload }){
-  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections]);
+function FinanceReportsView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, costCenters, salesOrders, orders, cashAdvances, leads, profiles, apVouchers, rfps, otherCollections, supplierReturns, reload }){
+  const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns]);
   const years = finReportYears(postings);
   const [tab,setTab]=useState('pl');
   const [year,setYear]=useState(years[0]);
@@ -56020,6 +56244,7 @@ function App(){
   // Sprint 2: expenses, cash advances (petty cash). Budget requests already loaded above.
   const [expenses,setExpenses]=useState([]); const [cashAdvances,setCashAdvances]=useState([]);
   const [otherCollections,setOtherCollections]=useState([]);
+  const [supplierReturns,setSupplierReturns]=useState([]);
   const [pcReplenishments,setPcReplenishments]=useState([]);
   // Custom Payment Calendar events — Finance-added items that don't fit the
   // auto categories (recurring reminders, ad-hoc planned spend, etc.)
@@ -56084,6 +56309,7 @@ function App(){
   const [govLoanInstallments,setGovLoanInstallments]=useState([]);
   const [salesTargets,setSalesTargets]=useState([]);
   const [createPOFromPR,setCreatePOFromPR]=useState(null);
+  const [returnFromPO,setReturnFromPO]=useState(null);
   // Default landing = Sales Pipeline. Admin stays here on login (no role
   // restriction kicks in). Every restricted role gets bounced to their own
   // fallback view by the useEffect below — so this only impacts Admin.
@@ -56339,6 +56565,7 @@ function App(){
     // Daily department check-ins (small) — recent window for the Command Center + weekly report.
     sb.from('daily_checkins').select('*').gte('checkin_date', new Date(Date.now()-21*86400000).toISOString().slice(0,10)).order('checkin_date',{ascending:false}).then(r=>{ if(r && !r.error && r.data) setDailyCheckins(r.data); }).catch(()=>{});
     sb.from('other_collections').select('*').is('deleted_at',null).order('date',{ascending:false}).then(r=>{ if(r && !r.error && r.data) setOtherCollections(r.data); }).catch(()=>{});
+    sb.from('supplier_returns').select('*').is('deleted_at',null).order('date',{ascending:false}).then(r=>{ if(r && !r.error && r.data) setSupplierReturns(r.data); }).catch(()=>{});
     const [pf,pr,cl,ld,lm,dm,ac,dac,pj,gj,prj,it,sp,dp,pq,po,sj,sc,gm,st,pi,so,sop,ba,bt,rf,vc,br,ex,ca,sm,emb,knt,emp,edoc,emem,enotes,htpl,hck,htr,hcyc,hrev,hjob,happ,ce,dr,dri,trn,trni,sbc,sbs,sbr,sbp,sbpi,sbproj,soam,soac,sccm,sew,pak]=await Promise.all([
       sb.from('profiles').select('*').eq('id',me).maybeSingle(),
       fetchAll(()=>sb.from('profiles').select('id,name,email,role,avatar_color,created_at,commission_rate,commission_model,commission_quota,commission_tiers').is('deleted_at', null)),
@@ -56576,7 +56803,7 @@ function App(){
       allowed = new Set(['ops-command','agm-approvals','scorecard','checkin','toolbox','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
-        'inventory','pur-home','requests','queue','orders','stock-out','stock-movements','suppliers','pur-resources','materials-library',
+        'inventory','pur-home','requests','queue','orders','supplier-returns','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','fin-reports','budgets','estimates','petty-cash','cash-advances','other-collections','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-requests','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll','attendance','attendance-filings','pay-setup','payroll-run',
@@ -56652,20 +56879,20 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_admin'){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','subcon-cutting','prod','sampling','pur-cash-advance']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','subcon-cutting','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_personnel'){
       // Purchasing Personnel — same access as Purchasing Admin but WITHOUT Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','other-collections','cash-position','cash-flow','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','supplier-returns','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','other-collections','cash-position','cash-flow','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -57275,6 +57502,7 @@ function App(){
     ['petty-cash','Petty Cash','💵'],
     ['cash-advances','Cash Advances','🧾'],
     ['other-collections','Other Collections','🧾'],
+    ['supplier-returns','Returns to Supplier','↩'],
     ['pur-cash-advance','Purchasing DV Advances','🛍'],
     ['owner-advance','Owner Advances','👑'],
     ['budgets','Budget Requests','💰'],
@@ -57334,7 +57562,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
@@ -57477,7 +57705,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -57488,7 +57716,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -57500,7 +57728,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -57580,7 +57808,7 @@ function App(){
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
@@ -57825,7 +58053,7 @@ function App(){
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} onOpenQueue={()=>setView('queue')} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
         {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} openPRId={inboxPRId} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} clients={clients} orders={orders} reload={loadAll} onOpenPO={()=>setView('orders')} />}
-        {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} />}
+        {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} onReturn={(po)=>{ setReturnFromPO(po); setView('supplier-returns'); }} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
         {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
@@ -57885,10 +58113,11 @@ function App(){
         {view==='admin-permits' && <AdminPermitsView profile={profile} adminPermits={adminPermits} reload={loadAll} />}
         {view==='admin-maintenance' && <AdminMaintenanceView profile={profile} adminMaintenance={adminMaintenance} assets={assets} adminContacts={adminContacts} reload={loadAll} />}
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
-        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} rfps={rfps} otherCollections={otherCollections} />}
+        {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} rfps={rfps} otherCollections={otherCollections} supplierReturns={supplierReturns} />}
         {view==='other-collections' && <OtherCollectionsView profile={profile} profiles={profiles} otherCollections={otherCollections} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='supplier-returns' && <SupplierReturnsView profile={profile} profiles={profiles} suppliers={suppliers} items={items} orders={orders} bankAccounts={bankAccounts} chartAccounts={chartAccounts} supplierReturns={supplierReturns} reload={loadAll} openPO={returnFromPO} onClearPO={()=>setReturnFromPO(null)} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
-        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} rfps={rfps} otherCollections={otherCollections} reload={loadAll} />}
+        {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} rfps={rfps} otherCollections={otherCollections} supplierReturns={supplierReturns} reload={loadAll} />}
         {view.indexOf('soon-')===0 && (
           <div className="p-6"><h1 className="text-2xl font-bold text-slate-900 mb-1">Coming in the next round</h1><p className="text-slate-500 text-sm">Purchase Requests, Purchase Orders, Styles &amp; BOMs, and Reports are part of the next build round. They will appear here as we build them live.</p></div>
         )}
