@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 994 · New: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 995 · Bold now also works in the Marketing content planner — the Copy/caption box and the Notes box each have a B button (or Cmd/Ctrl+B), or type **like this**; the post preview shows it bold. · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -23592,6 +23592,22 @@ function ContentPostModal({ profile, profiles, campaigns, existing, prefill, onC
   const fileInput=useRef(null);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   function up(k,v){ setF(p=>({...p,[k]:v})); }
+  const copyRef=useRef(null);
+  // Bold the selection in a textarea by wrapping it in ** ** (toggles off if
+  // already bold). With nothing selected, drops a **bold text** placeholder.
+  function boldField(ref, key){
+    const ta=ref.current, cur=f[key]||'';
+    if(!ta){ up(key, cur+'****'); return; }
+    const start=ta.selectionStart, end=ta.selectionEnd, v=ta.value, sel=v.slice(start,end);
+    let next, a, b;
+    if(sel){
+      if(sel.startsWith('**') && sel.endsWith('**') && sel.length>=4){ const inner=sel.slice(2,-2); next=v.slice(0,start)+inner+v.slice(end); a=start; b=start+inner.length; }
+      else { next=v.slice(0,start)+'**'+sel+'**'+v.slice(end); a=start+2; b=end+2; }
+    } else { const ph='bold text'; next=v.slice(0,start)+'**'+ph+'**'+v.slice(end); a=start+2; b=start+2+ph.length; }
+    up(key, next);
+    requestAnimationFrame(()=>{ try{ ta.focus(); ta.setSelectionRange(a,b); }catch(_){} });
+  }
+  const boldKey=(ref,key)=>(e)=>{ if((e.metaKey||e.ctrlKey) && (e.key==='b'||e.key==='B')){ e.preventDefault(); boldField(ref,key); } };
   async function uploadFiles(fileList){
     const files=Array.from(fileList||[]).filter(Boolean);
     if(!files.length) return;
@@ -23633,7 +23649,7 @@ function ContentPostModal({ profile, profiles, campaigns, existing, prefill, onC
           <div><label className="text-xs font-semibold text-slate-500">Scheduled date</label><input type="date" value={f.scheduled_date} onChange={e=>up('scheduled_date',e.target.value)} className="w-full border rounded px-2 py-1.5" /></div>
         </div>
         <div><label className="text-xs font-semibold text-slate-500">Campaign</label><select value={f.campaign_id} onChange={e=>up('campaign_id',e.target.value)} className="w-full border rounded px-2 py-1.5"><option value="">— none —</option>{(campaigns||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-        <div><label className="text-xs font-semibold text-slate-500">Copy / caption <span className="text-slate-400 font-normal">· ask Claude in Cowork to draft or polish this</span></label><textarea value={f.copy} onChange={e=>up('copy',e.target.value)} rows={5} className="w-full border rounded px-2 py-1.5" placeholder="The post caption or email body…" /></div>
+        <div><label className="text-xs font-semibold text-slate-500 flex items-center gap-2">Copy / caption <span className="text-slate-400 font-normal">· ask Claude in Cowork to draft or polish this</span><button type="button" onClick={()=>boldField(copyRef,'copy')} title="Bold the selected text (⌘/Ctrl+B). Or type **like this**." className="ml-auto text-[11px] px-2 py-0.5 rounded border bg-white hover:bg-slate-50 font-bold leading-none">B</button></label><textarea ref={copyRef} value={f.copy} onChange={e=>up('copy',e.target.value)} onKeyDown={boldKey(copyRef,'copy')} rows={5} className="w-full border rounded px-2 py-1.5" placeholder="The post caption or email body… **bold** for emphasis" /></div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-xs font-semibold text-slate-500">Hashtags</label><input value={f.hashtags} onChange={e=>up('hashtags',e.target.value)} className="w-full border rounded px-2 py-1.5" placeholder="#steeze #customjersey" /></div>
           <div>
@@ -23663,7 +23679,7 @@ function ContentPostModal({ profile, profiles, campaigns, existing, prefill, onC
             ))}
           </div>}
         </div>
-        <div><label className="text-xs font-semibold text-slate-500">Notes</label><textarea ref={notesRef} value={f.notes} onChange={e=>up('notes',e.target.value)} onMouseUp={saveNotesH} onBlur={saveNotesH} rows={6} className="w-full border rounded px-2 py-1.5 min-h-[120px]" /></div>
+        <div><label className="text-xs font-semibold text-slate-500 flex items-center gap-2">Notes<button type="button" onClick={()=>boldField(notesRef,'notes')} title="Bold the selected text (⌘/Ctrl+B). Or type **like this**." className="ml-auto text-[11px] px-2 py-0.5 rounded border bg-white hover:bg-slate-50 font-bold leading-none">B</button></label><textarea ref={notesRef} value={f.notes} onChange={e=>up('notes',e.target.value)} onKeyDown={boldKey(notesRef,'notes')} onMouseUp={saveNotesH} onBlur={saveNotesH} rows={6} className="w-full border rounded px-2 py-1.5 min-h-[120px]" /></div>
         <div className="border-t pt-2">
           <div className="text-[10px] uppercase font-semibold text-slate-400 mb-1">Results (fill in after posting)</div>
           <div className="grid grid-cols-3 gap-3">
@@ -23938,7 +23954,7 @@ function MarketingHub({ profile, profiles, openContentId }){
         <div className="flex items-center gap-1 mb-1"><span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${ch.color}`}>{ch.icon} {ch.label}</span>{p.scheduled_date && <span className="text-[10px] text-slate-500">{fmtDate(p.scheduled_date)}</span>}</div>
         <div className="text-sm font-semibold leading-tight">{p.title||'—'}</div>
         {camp && <div className="text-[10px] text-indigo-600 mt-0.5">🎯 {camp}</div>}
-        {p.copy && <div className="text-[11px] text-slate-500 mt-1 line-clamp-2">{p.copy}</div>}
+        {p.copy && <div className="text-[11px] text-slate-500 mt-1 line-clamp-2 whitespace-pre-wrap">{renderInlineMentions(p.copy, [], 'mkc'+p.id)}</div>}
       </button>
       {p.link && /^https?:\/\//i.test(String(p.link).trim()) && <div className="mt-1"><a href={String(p.link).trim()} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} className="text-[10px] text-indigo-600 hover:underline inline-flex items-center gap-0.5">🔗 {/canva\./i.test(p.link)?'Canva':'Link'} ↗</a></div>}
       {Array.isArray(p.attachments)&&p.attachments.length>0 && <div className="flex items-center gap-1.5 flex-wrap mt-1" onClick={e=>e.stopPropagation()}>
