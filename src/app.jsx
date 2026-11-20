@@ -10958,13 +10958,14 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   // (balance>0, from an actual batch, not in-house) is genuine pending subcon
   // work — it must keep showing so the subcon can be reconciled & paid. Without
   // this, released trad/subli reports vanished once the job hit "delivered".
-  // Only recent released batches count as live activity, so this never
-  // resurfaces ancient delivered orders (which the grandfather guard protects
-  // against) or work already settled through the legacy manual payroll.
-  const SUBCON_ACTIVE_CUTOFF = (()=>{ const d=new Date(todayISO+'T00:00:00'); d.setDate(d.getDate()-180); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+  // Fixed feature start: only reports RELEASED on/after this date stay visible
+  // when the job is delivered. This captures the accounts flagged (released
+  // Nov 11 & 15) and everything going forward, while ALL older delivered orders
+  // keep the previous hidden behaviour — so the board never floods with history.
+  const SUBCON_ACTIVE_CUTOFF = '2026-11-10';
   const hasBoardActivity=(p)=> p.rows.some(s=>
     Number(s.returnsGood||0)>0 || Number(s.staged||0)>0 ||
-    (Number(s.batchCount||0)>0 && !s.inhouse && !s.legacyPaid && s.subcon_id && Number(s.balance||0)>0 && (!s.released || s.released>=SUBCON_ACTIVE_CUTOFF))
+    (Number(s.batchCount||0)>0 && !s.inhouse && !s.legacyPaid && s.subcon_id && Number(s.balance||0)>0 && s.released && s.released>=SUBCON_ACTIVE_CUTOFF)
   );
   const projSubconOpen=(p)=>{
     if(projDelivered(p) && !hasBoardActivity(p)) return false; // old delivered order, never tracked here
