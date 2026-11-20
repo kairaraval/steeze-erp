@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 996 · New: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 997 · New: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -47374,10 +47374,10 @@ function PurchasingCashAdvanceView({ profile, profiles, cashAdvances, bankAccoun
       <div className="bg-white border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
           <th className="text-left px-3 py-2">Ref</th><th className="text-left px-3 py-2">Purpose</th><th className="text-left px-3 py-2">Custodian</th>
-          <th className="text-right px-3 py-2">Advance</th><th className="text-right px-3 py-2">Spent</th><th className="text-center px-3 py-2">Status</th><th className="px-3 py-2"></th>
+          <th className="text-right px-3 py-2">Advance</th><th className="text-right px-3 py-2">Spent</th><th className="text-right px-3 py-2">Returned</th><th className="text-center px-3 py-2">Status</th><th className="px-3 py-2"></th>
         </tr></thead>
         <tbody>
-          {rows.length===0 && <tr><td colSpan="7" className="text-center text-slate-400 py-8">Nothing here. {canRequest && 'Click “＋ Request DV-day funds”.'}</td></tr>}
+          {rows.length===0 && <tr><td colSpan="8" className="text-center text-slate-400 py-8">Nothing here. {canRequest && 'Click “＋ Request DV-day funds”.'}</td></tr>}
           {rows.map(c=>{ const m=pcaMeta(c); const bd=pcaBreakdown(c.receipts); return (
             <tr key={c.id} className="border-t hover:bg-slate-50">
               <td className="px-3 py-2 font-mono text-xs">{c.number||'—'}<div className="text-[10px] text-slate-400">{fmtDate(c.date)}</div></td>
@@ -47385,6 +47385,7 @@ function PurchasingCashAdvanceView({ profile, profiles, cashAdvances, bankAccoun
               <td className="px-3 py-2 text-xs">{c.custodian_name||nameOf(c.custodian_id)}</td>
               <td className="px-3 py-2 text-right font-semibold">{peso(c.amount)}</td>
               <td className="px-3 py-2 text-right">{c.status==='requested'?'—':<>{peso(bd.cash)}<span className="text-[10px] text-slate-400 block">cash{bd.nonCash>0?` · +${peso(bd.nonCash)} check/BT`:''}</span></>}</td>
+              <td className="px-3 py-2 text-right">{(()=>{ const ret=Number(c.amount_returned||0); if(c.status==='requested'||ret<=0.005) return <span className="text-slate-300">—</span>; const dest = c.status==='liquidated' ? (c.return_destination==='bank' ? `🏦 ${(bankAccounts||[]).find(b=>b.id===c.return_bank_id)?.bank_name||'bank'}` : (c.return_destination==='cash' ? '💵 on hand' : '')) : ''; return <><span className="font-semibold text-emerald-700">{peso(ret)}</span>{dest && <span className="text-[10px] text-slate-400 block">{dest}</span>}</>; })()}</td>
               <td className="px-3 py-2 text-center"><span className={`text-[10px] px-1.5 py-0.5 rounded ${m.color}`}>{m.label}</span></td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
                 {m.key==='requested' && canFinance && <button onClick={()=>setReleasing(c)} className="text-xs text-emerald-700 hover:underline font-semibold mr-2">💵 Release</button>}
@@ -47483,6 +47484,10 @@ function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccount
   const [lines,setLines]=useState(Array.isArray(ca.receipts)&&ca.receipts.length?ca.receipts:[{ supplier:'', description:'', amount:'', payment_method:'Cash', reference:'', receipt_url:'', gl_account_code:'' }]);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [upIdx,setUpIdx]=useState(null);
+  // Where the returned (unspent) cash goes when Finance posts: kept as Cash on
+  // Hand, or deposited back to a bank. Defaults to how it was set, else cash.
+  const [returnDest,setReturnDest]=useState(ca.return_destination || 'cash');
+  const [returnBankId,setReturnBankId]=useState(ca.return_bank_id || ca.bank_id || '');
   const canFinance = pcaIsFinance(profile) || profile.role==='admin';
   const canEdit = ((pcaIsPurchasing(profile)||profile.role==='admin') && (!ca.liq_approval || ca.liq_approval==='pending_agm'));
   const bd=pcaBreakdown(lines); const advanced=Number(ca.amount||0);
@@ -47517,11 +47522,16 @@ function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccount
   async function postByFinance(){
     if(ca.liq_approval!=='pending_finance' && profile.role!=='admin'){ setMsg('This can be posted after the AGM approves.'); return; }
     const cl=cleanLines(); const cash=pcaBreakdown(cl).cash; const returned=Math.max(0,advanced-cash);
-    if(!confirm(`Post this DV-day liquidation?\n\nFrom DV cash: ${peso(cash)} of ${peso(advanced)}${returned>0.01?` · ${peso(returned)} to return`:''}.\n\nCheck / bank-transfer purchases are kept for record only — they are NOT paid or posted again here.`)) return;
+    const depositing = returned>0.01 && returnDest==='bank';
+    if(depositing && !returnBankId){ setMsg('Pick the bank where the returned cash was deposited (or tag it as kept on hand).'); return; }
+    const destLabel = returned<=0.01 ? '' : (returnDest==='bank' ? `Returned ${peso(returned)} deposited to ${(bankAccounts||[]).find(b=>b.id===returnBankId)?.bank_name||'bank'}.` : `Returned ${peso(returned)} kept as Cash on Hand.`);
+    if(!confirm(`Post this DV-day liquidation?\n\nFrom DV cash: ${peso(cash)} of ${peso(advanced)}.${destLabel?`\n\n${destLabel}`:''}\n\nCheck / bank-transfer purchases are kept for record only — they are NOT paid or posted again here.`)) return;
     setBusy(true); setMsg('');
     try{
-      if(returned>0.01 && ca.bank_id){ await insertBankTxnOnce({ bank_id:ca.bank_id, date:todayManila(), direction:'in', amount:returned, description:`Return from DV-day advance ${ca.number||''} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id:ca.id, created_by:profile.id }); }
-      const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:cash, amount_returned:returned, status:'liquidated', liquidated_at:todayManila(), liq_approval:'approved', liq_admin_by:profile.id, liq_admin_at:new Date().toISOString() }).eq('id',ca.id);
+      // Deposit back to a bank → move it out of Cash on Hand into that bank.
+      // Kept on hand → nothing to post; the unspent cash simply stays in the float.
+      if(depositing){ await insertBankTxnOnce({ bank_id:returnBankId, date:todayManila(), direction:'in', amount:returned, description:`Return from DV-day advance ${ca.number||''} · ${ca.custodian_name||''}`, ref_type:'cash_advance', ref_id:ca.id, created_by:profile.id }); }
+      const { error }=await sb.from('cash_advances').update({ receipts:cl, amount_liquidated:cash, amount_returned:returned, return_destination: returned>0.01?returnDest:null, return_bank_id: depositing?returnBankId:null, status:'liquidated', liquidated_at:todayManila(), liq_approval:'approved', liq_admin_by:profile.id, liq_admin_at:new Date().toISOString() }).eq('id',ca.id);
       if(error) throw error;
       setBusy(false); onSaved();
     }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
@@ -47539,6 +47549,9 @@ function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccount
           <div className="bg-slate-50 border rounded-lg p-2 text-center"><div className="text-[10px] uppercase text-slate-500">Total DV-day buys</div><div className="font-bold">{peso(bd.total)}</div></div>
         </div>
         <div className="text-[11px] text-slate-500 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2">ℹ Only <b>Cash</b> lines are drawn from the DV float and liquidated here. <b>Check</b> and <b>Bank Transfer</b> purchases are already recorded through the usual payment process — they're listed below for your complete DV-day record only and are <b>not</b> paid or posted again. A <b>Promissory Note</b> means not yet paid.</div>
+        {balance>0.005 && <div className="flex items-center justify-between gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm">
+          <span className="text-emerald-800">💵 <b>{peso(balance)}</b> cash to return to Accounting{ca.status==='liquidated' && ca.return_destination ? <span className="text-emerald-700 font-normal"> · {ca.return_destination==='bank' ? `deposited to ${(bankAccounts||[]).find(b=>b.id===ca.return_bank_id)?.bank_name||'bank'}` : 'kept as Cash on Hand'}</span> : ''}</span>
+        </div>}
         <div className="border rounded-xl overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="bg-slate-50 text-[10px] uppercase text-slate-400"><tr>
             <th className="text-left px-2 py-2">Supplier</th><th className="text-left px-2 py-2">Item / particulars</th><th className="text-right px-2 py-2">Amount</th>
@@ -47576,6 +47589,18 @@ function PCALiquidationModal({ ca, profile, profiles, chartAccounts, bankAccount
             {!ca.liq_checked_by && (pcaIsPurchasing(profile)||profile.role==='admin') && !readOnly && <button onClick={()=>sign('checked')} disabled={busy} className="mt-1 text-[11px] px-2 py-0.5 rounded bg-violet-600 text-white font-semibold" title="A second purchasing person checks & signs">✍ Sign as checker</button>}
           </div>
         </div>
+        {/* Finance tags where the returned cash went, before posting. */}
+        {ca.liq_approval==='pending_finance' && canFinance && balance>0.005 && (
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <div className="text-[11px] uppercase font-bold text-slate-500 mb-2">Returned cash — {peso(balance)} · where did it go?</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={()=>setReturnDest('cash')} className={`px-3 py-1.5 rounded-lg text-sm font-semibold border ${returnDest==='cash'?'bg-emerald-600 text-white border-emerald-600':'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>💵 Kept as Cash on Hand</button>
+              <button onClick={()=>setReturnDest('bank')} className={`px-3 py-1.5 rounded-lg text-sm font-semibold border ${returnDest==='bank'?'bg-indigo-600 text-white border-indigo-600':'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>🏦 Deposited to bank</button>
+              {returnDest==='bank' && <select className="input text-sm max-w-[16rem]" value={returnBankId} onChange={e=>setReturnBankId(e.target.value)}><option value="">— pick bank —</option>{(bankAccounts||[]).map(b=><option key={b.id} value={b.id}>{b.bank_name}</option>)}</select>}
+            </div>
+            <div className="text-[11px] text-slate-400 mt-1.5">{returnDest==='bank'?'Posts a deposit into the chosen bank (moves it out of Cash on Hand).':'The unspent cash stays in the Cash-on-Hand float — no bank entry.'}</div>
+          </div>
+        )}
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         <div className="flex gap-2 flex-wrap">
           {canEdit && <button onClick={saveDraft} disabled={busy} className="py-2 px-4 rounded-lg border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50">Save draft</button>}
