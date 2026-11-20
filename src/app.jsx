@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 989 · New: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 990 · New: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10001,6 +10001,31 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
     };
   });
 
+  // Running on-hand balance AFTER each movement, per item. Anchored to the
+  // item's CURRENT on-hand (items.qty, owned by the DB trigger) and walked
+  // backwards through that item's history, so the newest entry shows today's
+  // real stock and each earlier row shows what was left right after it.
+  // Computed over the FULL history (not the filtered view) so filters/sorting
+  // never change the numbers.
+  const balanceAfterById = (()=>{
+    const byItem = new Map();
+    (stockMovements||[]).forEach(s=>{ if(!s.item_id) return; if(!byItem.has(s.item_id)) byItem.set(s.item_id,[]); byItem.get(s.item_id).push(s); });
+    const map = {};
+    byItem.forEach((movs,itemId)=>{
+      const it=(items||[]).find(x=>x.id===itemId);
+      if(!it) return;                       // item deleted → can't anchor a balance
+      const sorted=movs.slice().sort((a,b)=> String(a.created_at||a.date||'').localeCompare(String(b.created_at||b.date||'')));
+      let run = Number(it.qty||0);           // newest entry's balance = current on-hand
+      for(let i=sorted.length-1;i>=0;i--){
+        const s=sorted[i];
+        map[s.id]=run;
+        const delta = s.type==='in' ? Number(s.qty||0) : -Number(s.qty||0);
+        run = run - delta;                   // step back to the balance before this entry
+      }
+    });
+    return map;
+  })();
+
   // Today / week / month tile totals (always computed from FULL data, not filtered)
   const summarize = (rows) => {
     const inRows  = rows.filter(s => s.type==='in');
@@ -10037,7 +10062,7 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
     <div className="p-6">
       <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
         <h1 className="text-2xl font-bold">📦 Stock Movements</h1>
-        <p className="text-slate-500 text-sm">Every IN and OUT, in one log — use this to double-check stock changes daily.</p>
+        <p className="text-slate-500 text-sm">Every IN and OUT, in one log — use this to double-check stock changes daily. The <b>Balance after</b> column shows each item's on-hand right after that entry (newest row = today's stock).</p>
       </div>
 
       {/* Summary tiles: Today / This Week / This Month */}
@@ -10101,6 +10126,7 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
           <th className="text-left px-3 py-2">Type</th>
           <th className="text-left px-3 py-2">Item</th>
           <th className="text-right px-3 py-2">Qty</th>
+          <th className="text-right px-3 py-2">Balance after</th>
           <th className="text-left px-3 py-2">Reason</th>
           <th className="text-left px-3 py-2">Reference</th>
           <th className="text-left px-3 py-2">Client / Notes</th>
@@ -10117,6 +10143,7 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
               <td className="px-3 py-2"><span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${isIn?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}`}>{isIn?'IN':'OUT'}</span></td>
               <td className="px-3 py-2">{s._item ? <>{s._item.name}{s._item.color?<span className="text-slate-500"> · {s._item.color}</span>:''}</> : <span className="text-slate-300">(item deleted)</span>}</td>
               <td className={`px-3 py-2 text-right font-bold ${isIn?'text-emerald-700':'text-rose-700'}`}>{isIn?'+':'−'}{Number(s.qty||0).toFixed(2)} {s._item?.unit||''}</td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">{balanceAfterById[s.id]!=null ? <span className={`font-semibold ${balanceAfterById[s.id]<0?'text-rose-600':'text-slate-800'}`}>{balanceAfterById[s.id].toFixed(2)} {s._item?.unit||''}</span> : <span className="text-slate-300">—</span>}</td>
               <td className="px-3 py-2 text-xs"><span className="px-1.5 py-0.5 rounded bg-slate-100">{s.reason||'—'}</span></td>
               <td className="px-3 py-2 text-xs font-mono">{s._ref || '—'}</td>
               <td className="px-3 py-2 text-xs">{s._client || s.notes || '—'}</td>
@@ -10125,7 +10152,7 @@ function StockMovementsView({ profile, profiles, items, prodJobs, orders, stockM
             </tr>
           );
         })}
-        {filtered.length===0 && <tr><td colSpan="9" className="text-center text-slate-400 py-8">No movements match this filter.</td></tr>}
+        {filtered.length===0 && <tr><td colSpan="10" className="text-center text-slate-400 py-8">No movements match this filter.</td></tr>}
         </tbody>
       </table></div></div>
     </div>
