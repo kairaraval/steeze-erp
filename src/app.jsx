@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 987 · Fix: the AGM 'For Approval' sidebar count matched the wrong stage — it was counting department requests still sitting in the Admin Office (status department_request) instead of the ones that actually reached the AGM (agm_review). The badge now matches the AGM's approval page exactly, so the number and the list agree.";
+const BUILD = "Live build 988 · New: Commission payout adjustments. On the end-of-month payout panel, each rep now has a '± Adjust' button to add or deduct a manual amount (e.g. a commission was paid but the project fell through — deduct it). Pending adjustments show on the rep's row, net out against their commissions, and are settled onto the same voucher when you generate the payout. A deduction larger than the commissions in that payout simply carries to the next one.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -38906,6 +38906,80 @@ function CommissionDraftView({ rep, rows, total, salesOrders, onClose }){
   );
 }
 
+function CommissionAdjustModal({ managerId, repName, profile, salesOrders, onClose, onSaved }){
+  const [dir,setDir]     = useState('deduct');   // 'add' | 'deduct'
+  const [amt,setAmt]     = useState('');
+  const [reason,setReason]= useState('');
+  const [soId,setSoId]   = useState('');
+  const [busy,setBusy]   = useState(false);
+  const mgrSOs = (salesOrders||[])
+    .filter(s=> s.manager_id===managerId )
+    .slice().sort((a,b)=>String(b.number||'').localeCompare(String(a.number||'')));
+  async function save(){
+    const n = Number(amt);
+    if(!(n>0)){ alert('Enter an amount greater than zero.'); return; }
+    if(!reason.trim()){ alert('Please add a reason for this adjustment.'); return; }
+    const signed = dir==='deduct' ? -Math.abs(n) : Math.abs(n);
+    setBusy(true);
+    try{
+      const { error } = await sb.from('commission_adjustments').insert({
+        manager_id: managerId,
+        amount: signed,
+        reason: reason.trim(),
+        so_id: soId || null,
+        status: 'pending',
+        created_by: profile?.id || null,
+      });
+      if(error) throw error;
+      onSaved && onSaved();
+    }catch(e){ alert(e.message||String(e)); setBusy(false); }
+  }
+  return ReactDOM.createPortal(
+    <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={e=>e.stopPropagation()}>
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <div>
+            <div className="font-bold text-slate-900">± Commission adjustment</div>
+            <div className="text-xs text-slate-500">{repName||'Sales rep'} · applies to the next payout</div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={()=>setDir('deduct')} className={`px-3 py-2 rounded-lg text-sm font-semibold border ${dir==='deduct'?'bg-rose-600 text-white border-rose-600':'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>− Deduct</button>
+            <button onClick={()=>setDir('add')} className={`px-3 py-2 rounded-lg text-sm font-semibold border ${dir==='add'?'bg-emerald-600 text-white border-emerald-600':'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>+ Add</button>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Amount (₱)</label>
+            <input type="number" min="0" step="0.01" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0.00"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" autoFocus />
+            <div className="text-xs text-slate-500 mt-1">
+              {amt && Number(amt)>0 ? <>This will <strong>{dir==='deduct'?'reduce':'increase'}</strong> {repName||'the rep'}'s next payout by <strong>{peso(Math.abs(Number(amt)))}</strong>.</> : 'Positive number — the direction above sets add or deduct.'}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Reason</label>
+            <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={2} placeholder="e.g. project did not push through — reverse paid commission"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Link a sales order (optional)</label>
+            <select value={soId} onChange={e=>setSoId(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+              <option value="">— none —</option>
+              {mgrSOs.map(s=> <option key={s.id} value={s.id}>{s.number} · {s.client_name||''}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
+          <button onClick={onClose} className="px-3 py-2 rounded-lg text-slate-500 text-sm hover:text-slate-800">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">{busy?'Saving…':'Save adjustment'}</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 /* ─────────── SALES MANAGER COMMISSIONS ─────────── */
 // One screen for sales reps to see their own commission ledger, and for admin
 // to see everyone's + run monthly payouts.
@@ -38948,6 +39022,14 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   const [showPaidHistory,setShowPaidHistory] = useState(false);
   // Which rep's printable commission draft is open (review doc before payout).
   const [draftRep,setDraftRep] = useState(null);
+  // Manual commission adjustments (add / deduct) that factor into a rep's payout.
+  const [adjustments,setAdjustments] = useState([]);
+  const [adjModal,setAdjModal] = useState(null); // { manager_id } being adjusted
+  async function loadAdjustments(){ try{ const { data }=await sb.from('commission_adjustments').select('*').is('deleted_at',null).order('created_at',{ascending:false}); setAdjustments(data||[]); }catch(_){ setAdjustments([]); } }
+  useEffect(()=>{ loadAdjustments(); },[]);
+  const pendingAdjFor=(id)=> (adjustments||[]).filter(a=>a.manager_id===id && a.status==='pending');
+  const adjSumFor=(id)=> pendingAdjFor(id).reduce((s,a)=>s+Number(a.amount||0),0);
+  async function delAdjustment(a){ if(!confirm('Remove this adjustment?')) return; try{ await sb.from('commission_adjustments').update({ deleted_at:new Date().toISOString() }).eq('id',a.id); await loadAdjustments(); }catch(e){ alert(e.message||String(e)); } }
   // The active rep filter — applies only when scope=team. When scope=mine,
   // the user's own ID is always the filter.
   const activeRepId = scope === 'mine' ? profile.id : (repFilter || null);
@@ -39051,8 +39133,8 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
   // Months that still have unpaid commission — for the "pay up to" dropdown.
   const outstandingMonths = Array.from(new Set((salesCommissions||[]).filter(r=>!r.paid_at && matchesRepFilter(r.manager_id)).map(monthOfComm).filter(Boolean))).sort().reverse();
   // Reps that still have something to pay AFTER the month/selection filters.
-  const payableReps = payoutByRep.filter(p => includedAmount(p) > 0.005);
-  const payoutTotal = payableReps.reduce((s,x) => s + includedAmount(x), 0);
+  const payableReps = payoutByRep.filter(p => (includedAmount(p) + adjSumFor(p.manager_id)) > 0.005);
+  const payoutTotal = payableReps.reduce((s,x) => s + includedAmount(x) + adjSumFor(x.manager_id), 0);
 
   // Paid history — what's ALREADY been paid, grouped by rep → the month the
   // voucher settled it (paid_at). Lets you check, per sales manager, which
@@ -39185,11 +39267,11 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
     const targets = (targetManagerId
       ? payoutByRep.filter(p => p.manager_id === targetManagerId)
       : payoutByRep)
-      .map(p => ({ ...p, rows: includedRows(p), amount: includedAmount(p) }))
-      .filter(p => p.amount > 0.005);
-    if(targets.length === 0){ setGenMsg('Nothing selected to pay. Check at least one commission row.'); return; }
+      .map(p => { const amount=includedAmount(p); const adj=adjSumFor(p.manager_id); return { ...p, rows: includedRows(p), amount, adj, net: amount + adj }; })
+      .filter(p => p.amount > 0.005 && p.net > 0.005);
+    if(targets.length === 0){ setGenMsg('Nothing payable. Check at least one commission row (a deduction can’t exceed the commissions in the same payout — it carries to the next one).'); return; }
     if(!selectedBankId){ setGenMsg('Pick the bank/wallet that will fund the payouts.'); return; }
-    const targetTotal = targets.reduce((s,x) => s + x.amount, 0);
+    const targetTotal = targets.reduce((s,x) => s + x.net, 0);
     const monthNote = payMonth ? ` (earned up to ${payMonth})` : '';
     const confirmMsg = targetManagerId
       ? `Generate voucher for ${repName(targetManagerId)} — ${peso(targetTotal)}${monthNote}, ${targets[0].rows.length} item(s)?\n\nGoes through standard Admin approval before disbursement.`
@@ -39203,14 +39285,15 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
       for(const payout of targets){
         const repProfile = (profiles||[]).find(x => x.id === payout.manager_id);
         const payee = repProfile ? (repProfile.name || repProfile.email) : 'Sales rep';
-        const rowsTxt = payout.rows.map(r => `${r.kind==='booking'?'Booking':'Collection'} ${soNumber(r.sales_order_id)} (${peso(r.amount)})`).join('; ');
+        const rowsTxt = payout.rows.map(r => `${r.kind==='booking'?'Booking':'Collection'} ${soNumber(r.sales_order_id)} (${peso(r.amount)})`).join('; ')
+          + (payout.adj!==0 ? `. Adjustment ${payout.adj>0?'+':''}${peso(payout.adj)}` : '');
         let number = await nextFinanceNumberFromDb(prefix, monthKey);
         let voucherId = null;
         // Retry once on conflict (mirrors the existing voucher creation pattern).
         for(let attempt = 0; attempt < 5; attempt++){
           const res = await sb.from('vouchers').insert({
             number, type:payoutType, date: todayManila(),
-            payee, amount: payout.amount,
+            payee, amount: payout.net,
             particulars: `Sales commission payout — ${payee}. ${rowsTxt}`,
             expense_category: payoutCategory||null,
             bank_id: selectedBankId,
@@ -39232,10 +39315,13 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
           paid_at: new Date().toISOString(),
           voucher_id: voucherId,
         }).in('id', ids);
+        // Settle this rep's pending adjustments against the same voucher.
+        if(payout.adj!==0){ try{ await sb.from('commission_adjustments').update({ status:'paid', voucher_id:voucherId, paid_at:new Date().toISOString() }).eq('manager_id', payout.manager_id).eq('status','pending').is('deleted_at',null); }catch(_){} }
         created++;
       }
       setGenerating(false);
       setGenMsg(`${created} voucher${created===1?'':'s'} created${failed>0?`, ${failed} failed`:''}. Sent to For Approval queue.`);
+      await loadAdjustments();
       reload && reload();
     } catch(e){
       setGenerating(false);
@@ -39390,6 +39476,9 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
                 const isOpen = expandedPayoutRep === p.manager_id;
                 const incRows = includedRows(p);
                 const inc = includedAmount(p);
+                const adj = adjSumFor(p.manager_id);
+                const net = inc + adj;
+                const repAdjs = pendingAdjFor(p.manager_id);
                 const bookingRows    = incRows.filter(r => r.kind === 'booking');
                 const collectionRows = incRows.filter(r => r.kind === 'collection');
                 const bookingTotal   = bookingRows.reduce((s,r) => s + Number(r.amount||0), 0);
@@ -39402,16 +39491,28 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
                       <td className="px-3 py-2 font-semibold">{repName(p.manager_id)}</td>
                       <td className="px-3 py-2 text-right">{bookingRows.length} · {peso(bookingTotal)}</td>
                       <td className="px-3 py-2 text-right">{collectionRows.length} · {peso(collectionTotal)}</td>
-                      <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(inc)}{excludedCount>0 && <div className="text-[9px] font-normal text-slate-400">{excludedCount} item{excludedCount===1?'':'s'} held back</div>}</td>
+                      <td className="px-3 py-2 text-right font-bold text-emerald-700">{peso(net)}{adj!==0 && <div className={`text-[9px] font-normal ${adj<0?'text-rose-500':'text-emerald-600'}`}>{peso(inc)} comm {adj>0?'+':'−'} {peso(Math.abs(adj))} adj</div>}{excludedCount>0 && <div className="text-[9px] font-normal text-slate-400">{excludedCount} item{excludedCount===1?'':'s'} held back</div>}</td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <button onClick={(e)=>{ e.stopPropagation(); setAdjModal({ manager_id:p.manager_id }); }} className="text-[10px] px-2 py-1 rounded border border-amber-300 bg-white text-amber-700 font-semibold hover:bg-amber-50 mr-1" title="Add a manual adjustment (add or deduct) to this rep's payout">± Adjust</button>
                         <button onClick={(e)=>{ e.stopPropagation(); setDraftRep({ ...p, rows: incRows, amount: inc }); }} className="text-[10px] px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 font-semibold hover:bg-slate-50 mr-1" title="Printable draft (selected rows only) to send to this rep for review before paying">📄 Draft</button>
-                        <button disabled={generating || !selectedBankId || inc<=0.005} onClick={(e)=>{ e.stopPropagation(); generatePayoutVouchers(p.manager_id); }} className="text-[10px] px-2 py-1 rounded bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">📤 Generate voucher</button>
+                        <button disabled={generating || !selectedBankId || net<=0.005} onClick={(e)=>{ e.stopPropagation(); generatePayoutVouchers(p.manager_id); }} className="text-[10px] px-2 py-1 rounded bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50">📤 Generate voucher</button>
                       </td>
                     </tr>
                     {isOpen && (
                       <tr className="bg-slate-50/60">
                         <td></td>
                         <td colSpan="5" className="px-3 py-3">
+                          {repAdjs.length>0 && (
+                            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50/60 p-2">
+                              <div className="text-[10px] uppercase font-semibold text-amber-800 mb-1">Adjustments (applied to this payout)</div>
+                              <div className="space-y-1">{repAdjs.map(a=>(
+                                <div key={a.id} className="flex items-center justify-between gap-2 text-[11px]">
+                                  <span className="text-slate-600 truncate">{a.reason||'(no reason)'}</span>
+                                  <span className="flex items-center gap-2 shrink-0"><span className={`font-bold ${Number(a.amount)<0?'text-rose-600':'text-emerald-700'}`}>{Number(a.amount)>0?'+':'−'}{peso(Math.abs(Number(a.amount)))}</span><button onClick={()=>delAdjustment(a)} className="text-slate-400 hover:text-rose-500" title="Remove">✕</button></span>
+                                </div>
+                              ))}</div>
+                            </div>
+                          )}
                           <div className="text-[10px] uppercase font-semibold text-slate-500 mb-2">Breakdown — tick the rows to pay ({incRows.length} of {p.rows.length} selected)</div>
                           <table className="w-full text-[11px] bg-white border rounded">
                             <thead className="bg-slate-50 text-slate-500 uppercase"><tr>
@@ -39508,6 +39609,7 @@ function CommissionsView({ profile, profiles, salesOrders, leads, salesCommissio
       )}
 
       {draftRep && <CommissionDraftView rep={(profiles||[]).find(x=>x.id===draftRep.manager_id)} rows={draftRep.rows} total={draftRep.amount} salesOrders={salesOrders} onClose={()=>setDraftRep(null)} />}
+      {adjModal && <CommissionAdjustModal managerId={adjModal.manager_id} repName={repName(adjModal.manager_id)} profile={profile} salesOrders={salesOrders} onClose={()=>setAdjModal(null)} onSaved={()=>{ setAdjModal(null); loadAdjustments(); }} />}
 
       {/* Filters */}
       <div className="flex items-center gap-2 flex-wrap bg-white border rounded-xl p-3 mb-3">
