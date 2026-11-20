@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 991 · Fix: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 992 · Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -10951,7 +10951,21 @@ function SubconSewingView({ profile, profiles, subcons, leads, clients, prodJobs
   // returns logged + nothing added to payroll here) is treated as done so old
   // delivered orders don't flood the board.
   const projDelivered=(p)=> !!(p.job && PRODUCTION_DONE.includes(p.job.status));
-  const hasBoardActivity=(p)=> p.rows.some(s=> Number(s.returnsGood||0)>0 || Number(s.staged||0)>0);
+  // "Board activity" = real evidence this project is being tracked here, so the
+  // grandfather guard below won't hide it just because the production job is
+  // already marked delivered. Besides logged returns / staged payroll, a sorting
+  // report that was RELEASED to a real subcon and still has pieces out
+  // (balance>0, from an actual batch, not in-house) is genuine pending subcon
+  // work — it must keep showing so the subcon can be reconciled & paid. Without
+  // this, released trad/subli reports vanished once the job hit "delivered".
+  // Only recent released batches count as live activity, so this never
+  // resurfaces ancient delivered orders (which the grandfather guard protects
+  // against) or work already settled through the legacy manual payroll.
+  const SUBCON_ACTIVE_CUTOFF = (()=>{ const d=new Date(todayISO+'T00:00:00'); d.setDate(d.getDate()-180); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+  const hasBoardActivity=(p)=> p.rows.some(s=>
+    Number(s.returnsGood||0)>0 || Number(s.staged||0)>0 ||
+    (Number(s.batchCount||0)>0 && !s.inhouse && !s.legacyPaid && s.subcon_id && Number(s.balance||0)>0 && (!s.released || s.released>=SUBCON_ACTIVE_CUTOFF))
+  );
   const projSubconOpen=(p)=>{
     if(projDelivered(p) && !hasBoardActivity(p)) return false; // old delivered order, never tracked here
     return p.rows.some(s=> (Number(s.out||0)>0 && Number(s.balance||0)>0) || Number(s.payable||0)>0 || Number(s.unpaid||0)>0 );
