@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 992 · Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 993 · Tidy: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -1092,6 +1092,29 @@ function InlineAttachment({ att }){
   return <button type="button" onClick={openTab} className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded border bg-white hover:bg-slate-50 text-xs"><span>🔗</span><span className="font-medium truncate max-w-[12rem]">{att.name}</span></button>;
 }
 
+// Compact version pill, bottom-right. Shows just "Build N" by default so it
+// never crowds the screen. Admins can hover to read the full changelog, or
+// click to pin it open (click again to collapse).
+function BuildBadge({ isAdmin }){
+  const [open,setOpen]=useState(false);
+  const num=(String(BUILD).match(/build\s+(\d+)/i)||[])[1]||'';
+  if(isAdmin && open){
+    return (
+      <div className="no-print fixed bottom-3 right-3 max-w-[460px] text-[10px] px-3 py-2 rounded-xl bg-slate-800 text-white/90 shadow-lg cursor-pointer z-[55]" onClick={()=>setOpen(false)} title="Click to collapse">
+        <div className="font-bold mb-0.5">Build {num} · tap to collapse</div>
+        <div className="leading-snug">{BUILD}</div>
+      </div>
+    );
+  }
+  return (
+    <div
+      className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800/70 text-white/80 cursor-default z-[55]"
+      title={isAdmin ? String(BUILD) : 'App version — mention this number to support'}
+      onClick={()=>{ if(isAdmin) setOpen(true); }}
+      style={isAdmin?{cursor:'pointer'}:undefined}
+    >Build {num||'—'}</div>
+  );
+}
 function Modal({ title, onClose, children, wide, xwide }){
   const widthCls = xwide ? 'max-w-6xl' : (wide ? 'max-w-3xl' : 'max-w-lg');
   // Force portrait Letter (8.5in × 11in) whenever ANY modal is mounted.
@@ -58296,11 +58319,10 @@ function App(){
         <TransmittalViewModal trn={trnViewing} transmittalItems={transmittalItems} clients={clients} profiles={profiles} salesOrders={salesOrders} profile={profile} onClose={()=>setTrnViewing(null)} onSaved={()=>{ setTrnViewing(null); loadAll(); }} />
       )}
 
-      {/* Admins see the full build changelog; everyone else sees a compact build
-          number so they (and support) can always verify which version they're on. */}
-      {profile.role==='admin'
-        ? <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800 text-white/90">{BUILD}</div>
-        : <div className="no-print fixed bottom-3 right-3 text-[10px] px-2 py-1 rounded-full bg-slate-800/70 text-white/80" title="App version — mention this number to support">Build {RUN_BUILD}</div>}
+      {/* Everyone — including admins — sees a compact build number so it never
+          crowds the screen. The full changelog is kept on hover (title) for
+          admins, who can also click the pill to expand/collapse it. */}
+      <BuildBadge isAdmin={profile.role==='admin'} />
       {updateReady && (
         <div className="no-print fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 bg-indigo-600 text-white rounded-full shadow-lg pl-4 pr-2 py-2 text-sm">
           <span>✨ New version available</span>
