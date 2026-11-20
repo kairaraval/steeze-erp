@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 993 · Tidy: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 994 · New: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -476,11 +476,18 @@ function parseMentionsDetail(text, profiles){
 }
 // Highlight @mentions inside a plain run of text.
 function renderInlineMentions(text, profiles, keyBase){
-  const parts=[]; const re=/(@[\p{L}\p{N}._-]+)/gu; let last=0,m,i=0; const s=text||'';
-  while((m=re.exec(s))){ if(m.index>last) parts.push(s.slice(last,m.index));
-    const tag=m[0].slice(1).toLowerCase(); const p=(profiles||[]).find(pp => profileHandle(pp) === tag);
-    if(p) parts.push(<span key={keyBase+'m'+(i++)} className="bg-indigo-100 text-indigo-700 rounded px-1 font-medium">{m[0]}</span>); else parts.push(m[0]);
-    last=re.lastIndex; }
+  const parts=[]; const s=text||''; let i=0;
+  // One token = **bold** (no line breaks inside) OR an @mention. Bold is matched
+  // first so a mention inside **…** still highlights (we recurse on the inner).
+  const re=/(\*\*(?=\S)([^\n*][^\n]*?)\*\*)|(@[\p{L}\p{N}._-]+)/gu;
+  const mention=(tok,key)=>{ const tag=tok.slice(1).toLowerCase(); const p=(profiles||[]).find(pp=>profileHandle(pp)===tag); return p? <span key={key} className="bg-indigo-100 text-indigo-700 rounded px-1 font-medium">{tok}</span> : tok; };
+  let last=0,m;
+  while((m=re.exec(s))){
+    if(m.index>last) parts.push(s.slice(last,m.index));
+    if(m[1]!=null){ parts.push(<strong key={keyBase+'b'+(i++)}>{renderInlineMentions(m[2],profiles,keyBase+'bi'+i)}</strong>); }
+    else { parts.push(mention(m[3], keyBase+'m'+(i++))); }
+    last=re.lastIndex;
+  }
   if(last<s.length) parts.push(s.slice(last));
   return parts;
 }
@@ -1207,6 +1214,27 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
   useEffect(()=>{ try{ if(text && text.trim()) localStorage.setItem(draftKey, text); else localStorage.removeItem(draftKey); }catch(_){} },[text, draftKey]);
   const [pending,setPending]=useState([]); // unposted attachments for the next comment
   const [tableOpen,setTableOpen]=useState(false);
+  const taRef=React.useRef(null);
+  // Wrap the selected text in ** ** (bold). With nothing selected, drops in a
+  // **bold** placeholder and selects the word so you can type over it.
+  function wrapBold(){
+    const ta=taRef.current; if(!ta){ setText(t=>t+'****'); return; }
+    const start=ta.selectionStart, end=ta.selectionEnd, v=ta.value;
+    const sel=v.slice(start,end);
+    if(sel){
+      // Toggle off if it's already wrapped.
+      if(sel.startsWith('**') && sel.endsWith('**') && sel.length>=4){
+        const inner=sel.slice(2,-2); const next=v.slice(0,start)+inner+v.slice(end);
+        setText(next); requestAnimationFrame(()=>{ try{ ta.focus(); ta.setSelectionRange(start, start+inner.length); }catch(_){} });
+      } else {
+        const next=v.slice(0,start)+'**'+sel+'**'+v.slice(end);
+        setText(next); requestAnimationFrame(()=>{ try{ ta.focus(); ta.setSelectionRange(start+2, end+2); }catch(_){} });
+      }
+    } else {
+      const ph='bold text'; const next=v.slice(0,start)+'**'+ph+'**'+v.slice(end);
+      setText(next); requestAnimationFrame(()=>{ try{ ta.focus(); ta.setSelectionRange(start+2, start+2+ph.length); }catch(_){} });
+    }
+  }
   const [reading,setReading]=useState(false); const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   // Inline edit state — one comment at a time.
   const [editId,setEditId]=useState(null);
@@ -1369,7 +1397,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
         </div>
       )}
       <div className="border rounded-lg p-3 bg-slate-50" onPaste={onPasteImage}>
-        <textarea className="input min-h-[70px]" value={text} onChange={e=>setText(e.target.value)} onPaste={onPasteImage} placeholder="Leave a note. Tag with @firstname. Paste a screenshot with ⌘V." />
+        <textarea ref={taRef} className="input min-h-[70px]" value={text} onChange={e=>setText(e.target.value)} onPaste={onPasteImage} onKeyDown={e=>{ if((e.metaKey||e.ctrlKey) && (e.key==='b'||e.key==='B')){ e.preventDefault(); wrapBold(); } }} placeholder="Leave a note. Tag with @firstname. **bold** for emphasis. Paste a screenshot with ⌘V." />
         {pending.length>0 && (
           <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">{pending.map((a,i)=>(
             <div key={i} className="flex items-center gap-2 p-2 bg-white border rounded text-xs"><span>{a.type==='image'?'🖼️':a.type==='pdf'?'📄':'🔗'}</span><span className="flex-1 truncate" title={a.name}>{a.name}</span><button onClick={()=>removePending(i)} className="text-rose-400">✕</button></div>
@@ -1378,6 +1406,7 @@ function ThreadBody({ profile, profiles, table, match, scope, titleText, onBack,
         <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50 cursor-pointer">📎 {reading?'…':'Attach (multi)'}<input type="file" multiple accept="image/*,.pdf,application/pdf,.xlsx,.xls,.csv,.doc,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={pickFiles} disabled={reading} /></label>
+            <button onClick={wrapBold} title="Bold the selected text (⌘/Ctrl+B). Or type **like this**." className="text-xs px-2.5 py-1 rounded border bg-white hover:bg-slate-50 font-bold">B</button>
             <button onClick={addLink} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">🔗 Link</button>
             <button onClick={()=>setTableOpen(true)} className="text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50">📊 Table</button>
             <span className="text-[10px] text-slate-400">or paste · ⌘V</span>
