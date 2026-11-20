@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 999 · Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 1000 · New: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -44638,10 +44638,11 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
   const deptPRs = (requests||[]).filter(r=>!r.deleted_at && r.status==='agm_review');
   const agmRfps = (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm');
+  const budgetReqs = (budgetRequests||[]).filter(b=>!b.deleted_at && b.agm_approval==='pending_agm' && (b.status==='pending'||!b.status));
   const budgetLiqs = (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_agm');
   const caLiqs = (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_agm');
   const pcLiqs = (pcReplenishments||[]).filter(r=>r.status==='pending_agm');
-  const total = deptPRs.length + agmRfps.length + budgetLiqs.length + caLiqs.length + pcLiqs.length;
+  const total = deptPRs.length + agmRfps.length + budgetReqs.length + budgetLiqs.length + caLiqs.length + pcLiqs.length;
 
   async function notifyRoles(roles, text, link_view, ref_type, ref_id){
     try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',roles); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text, link_view, ref_type, ref_id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
@@ -44665,6 +44666,9 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
   async function returnRFP(r, note){ note = note===undefined ? prompt('Reason for returning / rejecting this RFP?') : note; if(note===null) return; const { error }=await sb.from('rfps').update({ status:'rejected', rejected_reason:nn(note), agm_note:nn(note) }).eq('id',r.id); if(error){ alert(error.message); return; }
     try{ const { data:apv }=await sb.from('ap_vouchers').select('id,created_by,number').eq('rfp_id', r.id).is('deleted_at',null); if(apv&&apv.length){ await sb.from('ap_vouchers').update({ status:'returned', rfp_id:null, return_note:nn(note), returned_at:stamp() }).in('id', apv.map(a=>a.id)); const notif=apv.filter(a=>a.created_by&&a.created_by!==profile.id).map(a=>({ recipient_id:a.created_by, actor_id:profile.id, type:'system', text:`↩ A/P Voucher ${a.number} returned — edit and resend for payment.${note?` Reason: ${String(note).slice(0,70)}`:''}`, link_view:'ap-vouchers', ref_type:'ap_voucher', ref_id:a.id })); if(notif.length) await sb.from('notifications').insert(notif); } }catch(_){}
     reload&&reload(); }
+  // Budget REQUEST — AGM is the first approver, then Finance gives final approval.
+  async function approveBudgetReq(b){ const { error }=await sb.from('budget_requests').update({ agm_approval:'approved', agm_by:profile.id, agm_at:stamp() }).eq('id',b.id); if(error){ alert(error.message); return; } await notifyRoles(['accounting','accounting_officer','admin'], `💰 Budget request approved by AGM — awaiting Finance · ${b.department||''} ${(b.purpose||'').slice(0,40)} ${peso(b.amount||0)}`, 'budgets','budget_request',b.id); try{ if(b.requested_by && b.requested_by!==profile.id) await sb.from('notifications').insert({ recipient_id:b.requested_by, actor_id:profile.id, type:'system', text:`✅ Your budget request "${(b.purpose||'').slice(0,50)}" was approved by the AGM — now with Finance for final approval.`, link_view:'budgets', ref_type:'budget_request', ref_id:b.id }); }catch(_){} reload&&reload(); }
+  async function returnBudgetReq(b){ const note=prompt('Return this budget request to the department. Why?'); if(note===null) return; const { error }=await sb.from('budget_requests').update({ status:'rejected', agm_approval:null, notes:(b.notes?b.notes+'\n':'')+'[AGM returned: '+(note||'')+']' }).eq('id',b.id); if(error){ alert(error.message); return; } try{ if(b.requested_by && b.requested_by!==profile.id) await sb.from('notifications').insert({ recipient_id:b.requested_by, actor_id:profile.id, type:'system', text:`↩ Your budget request "${(b.purpose||'').slice(0,50)}" was returned by the AGM${note?`: ${note}`:''}.`, link_view:'budgets', ref_type:'budget_request', ref_id:b.id }); }catch(_){} reload&&reload(); }
   // Budget liquidation
   async function approveBudget(b, note){ const { error }=await sb.from('budget_requests').update({ liq_approval:'pending_admin', liq_agm_by:profile.id, liq_agm_at:stamp(), liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } await notifyRoles(['admin'], `💰 Budget liquidation approved by AGM — awaiting your approval · ${(b.purpose||'').slice(0,40)} ${peso(b.amount_liquidated||0)}`, 'approvals','budget_request',b.id); reload&&reload(); }
   async function returnBudget(b, note){ note = note===undefined ? prompt('Return the liquidation to the requester. Why?') : note; if(note===null) return; const { error }=await sb.from('budget_requests').update({ liq_approval:null, liq_note:nn(note) }).eq('id',b.id); if(error){ alert(error.message); return; } reload&&reload(); }
@@ -44718,6 +44722,21 @@ function AGMApprovalsView({ profile, profiles, requests, rfps, budgetRequests, c
               <div className="text-[11px] text-slate-400">by {nameOf(r.requested_by)}{Array.isArray(r.attachments)&&r.attachments.length?` · 📎 ${r.attachments.length}`:''}</div>
             </div>
             <div onClick={e=>e.stopPropagation()}><OpenBtn kind="rfp" data={r} /></div>
+          </div>
+        ))}
+      </Section>
+
+      <Section title="Budget Requests" icon="💰" items={budgetReqs}>
+        {budgetReqs.map(b=>(
+          <div key={b.id} className="px-4 py-3 flex items-center gap-3 flex-wrap hover:bg-slate-50">
+            <div className="flex-1 min-w-[200px]">
+              <div className="font-medium">{b.department||''} · {(b.purpose||'').slice(0,60)} · <span className="text-emerald-700">{peso(b.amount||0)}</span></div>
+              <div className="text-xs text-slate-500">by {nameOf(b.requested_by)}{b.date_needed?` · needed by ${fmtDate(b.date_needed)}`:''}{b.notes?` · ${String(b.notes).slice(0,50)}`:''}</div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={()=>returnBudgetReq(b)} className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold hover:bg-slate-50">↩ Return</button>
+              <button onClick={()=>approveBudgetReq(b)} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">✅ Approve</button>
+            </div>
           </div>
         ))}
       </Section>
@@ -46713,11 +46732,14 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
       bank_name:f.bank_name.trim()||null, bank_account_name:f.bank_account_name.trim()||null, bank_account_number:f.bank_account_number.trim()||null,
       request_attachments:reqAtts,
     };
-    if(!isEdit){ payload.requested_by = profile.id; payload.status = 'pending'; }
-    const { error } = isEdit
-      ? await sb.from('budget_requests').update(payload).eq('id', existing.id)
-      : await sb.from('budget_requests').insert(payload);
-    setBusy(false); if(error){ setMsg(error.message); return; }
+    if(!isEdit){ payload.requested_by = profile.id; payload.status = 'pending'; payload.agm_approval = 'pending_agm'; }
+    const { data:ins, error } = isEdit
+      ? await sb.from('budget_requests').update(payload).eq('id', existing.id).select('id').single()
+      : await sb.from('budget_requests').insert(payload).select('id').single();
+    if(error){ setBusy(false); setMsg(error.message); return; }
+    // Budget requests go to the AGM first. Notify her (and Admin) on a new one.
+    if(!isEdit){ try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['agm','admin']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`💰 New budget request from ${f.department||profile.name||'a department'} — ${peso(amt)} · ${(f.purpose||'').slice(0,50)} — awaiting AGM approval`, link_view:'agm-approvals', ref_type:'budget_request', ref_id:ins?.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){} }
+    setBusy(false);
     onSaved();
   }
   async function notifyRequester(text){
@@ -46786,9 +46808,13 @@ function BudgetRequestFormModal({ existing, profile, canApprove, chartAccounts, 
         </div>
         {msg && <div className="text-xs text-rose-600">{msg}</div>}
         {(!isEdit || status==='pending') && <button onClick={save} disabled={busy} className="w-full py-2 rounded-lg bg-indigo-600 text-white font-semibold disabled:opacity-50">{busy?'Saving…':isEdit?'Save changes':'Submit request'}</button>}
-        {isEdit && status==='pending' && canApprove && (
+        {isEdit && status==='pending' && canApprove && existing?.agm_approval==='pending_agm' && (
+          <div className="pt-2 border-t text-xs text-sky-700 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 mt-2">⏳ Awaiting AGM approval — budget requests go to the AGM first. Once she approves, this is ready for Finance to give final approval.</div>
+        )}
+        {isEdit && status==='pending' && canApprove && existing?.agm_approval!=='pending_agm' && (
           <div className="flex gap-2 pt-2 border-t">
-            <button onClick={approve} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">✓ Approve</button>
+            {existing?.agm_approval==='approved' && <span className="self-center text-[11px] text-emerald-700">✅ AGM approved</span>}
+            <button onClick={approve} disabled={busy} className="flex-1 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-50">✓ Approve (Finance)</button>
             <button onClick={reject} disabled={busy} className="py-2 px-4 rounded-lg border border-rose-300 text-rose-600 font-semibold hover:bg-rose-50 disabled:opacity-50">✕ Reject</button>
           </div>
         )}
@@ -57486,6 +57512,7 @@ function App(){
   // them). 'department_request' is still sitting in the Admin Office queue.
   const agmApprovalsPending = (requests||[]).filter(r=>!r.deleted_at && r.status==='agm_review').length
     + (rfps||[]).filter(r=>!r.deleted_at && r.status==='pending_agm').length
+    + (budgetRequests||[]).filter(b=>!b.deleted_at && b.agm_approval==='pending_agm' && (b.status==='pending'||!b.status)).length
     + (budgetRequests||[]).filter(b=>!b.deleted_at && b.liq_approval==='pending_agm').length
     + (cashAdvances||[]).filter(c=>!c.deleted_at && c.liq_approval==='pending_agm').length
     + (pcReplenishments||[]).filter(r=>r.status==='pending_agm').length;
