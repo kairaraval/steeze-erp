@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 1002 · AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 1003 · AI Auditor: 'Open →' on a flagged item now jumps straight to that exact record — the specific RFP, sales order, cash advance (DV / owner / petty cash) or budget request opens in its own screen, instead of dumping you on the whole list page. · Build 1002: AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -46444,10 +46444,11 @@ function SourcingItineraryModal({ existing, profile, onClose, onSaved }){
   );
 }
 
-function BudgetRequestsView({ profile, profiles, budgetRequests, chartAccounts, costCenters, bankAccounts, reload }){
+function BudgetRequestsView({ profile, profiles, budgetRequests, chartAccounts, costCenters, bankAccounts, reload, openId, onOpenConsumed }){
   const [creating,setCreating]=useState(false);
   const [editing,setEditing]=useState(null);
   const [filter,setFilter]=useState('');
+  useEffect(()=>{ if(openId){ const b=(budgetRequests||[]).find(x=>x.id===openId); if(b) setEditing(b); onOpenConsumed&&onOpenConsumed(); } },[openId, budgetRequests]);
   const [receiptView,setReceiptView]=useState(null); // in-page attachment viewer
   async function openReceipt(rawKey){
     const kind = /\.pdf(\?|$)/i.test(String(rawKey||'')) ? 'pdf' : 'image';
@@ -47371,12 +47372,13 @@ function pcaMeta(ca){
   if(ca.liq_approval==='pending_finance') return { key:'pending_finance', label:'Liquidation — awaiting Finance', color:'bg-sky-100 text-sky-700' };
   return { key:'released', label:'Released — to liquidate', color:'bg-indigo-100 text-indigo-700' };
 }
-function PurchasingCashAdvanceView({ profile, profiles, cashAdvances, bankAccounts, chartAccounts, reload }){
+function PurchasingCashAdvanceView({ profile, profiles, cashAdvances, bankAccounts, chartAccounts, reload, openId, onOpenConsumed }){
   const [requesting,setRequesting]=useState(false);
   const [releasing,setReleasing]=useState(null);
   const [liquidating,setLiquidating]=useState(null);
   const [viewing,setViewing]=useState(null);
   const [filter,setFilter]=useState('open');
+  useEffect(()=>{ if(openId){ const c=(cashAdvances||[]).find(x=>x.id===openId); if(c){ setFilter('all'); setLiquidating(c); } onOpenConsumed&&onOpenConsumed(); } },[openId, cashAdvances]);
   const canRequest = pcaIsPurchasing(profile) || profile.role==='admin';
   const canFinance = pcaIsFinance(profile) || profile.role==='admin';
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
@@ -47694,12 +47696,13 @@ function ownerMeta(ca){
   if(ca.liq_approval==='pending_finance') return { key:'pending_finance', label:'Liquidation — awaiting Finance', color:'bg-sky-100 text-sky-700' };
   return { key:'released', label:'Released — to liquidate', color:'bg-indigo-100 text-indigo-700' };
 }
-function OwnerAdvanceView({ profile, profiles, cashAdvances, bankAccounts, chartAccounts, reload }){
+function OwnerAdvanceView({ profile, profiles, cashAdvances, bankAccounts, chartAccounts, reload, openId, onOpenConsumed }){
   const [requesting,setRequesting]=useState(false);
   const [releasing,setReleasing]=useState(null);
   const [liquidating,setLiquidating]=useState(null);
   const [viewing,setViewing]=useState(null);
   const [filter,setFilter]=useState('open');
+  useEffect(()=>{ if(openId){ const c=(cashAdvances||[]).find(x=>x.id===openId); if(c){ setFilter('all'); setLiquidating(c); } onOpenConsumed&&onOpenConsumed(); } },[openId, cashAdvances]);
   const isOwner = profile.role==='admin';
   const canFinance = pcaIsFinance(profile) || profile.role==='admin';
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
@@ -47906,7 +47909,7 @@ function OwnerLiquidationDoc({ ca, profiles, onClose }){
   );
 }
 
-function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts, chartAccounts, costCenters, replenishments, reload, kind }){
+function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts, chartAccounts, costCenters, replenishments, reload, kind, openId, onOpenConsumed }){
   // `kind` props split the single cash_advances table into two distinct views:
   //   'petty_cash'   — petty cash float for daily operational small expenses
   //   'cash_advance' — small loans to employees, paid back from payroll
@@ -47920,6 +47923,7 @@ function PettyCashView({ profile, profiles, cashAdvances, expenses, bankAccounts
   // For Petty Cash, clicking a row opens a detail modal that shows linked
   // expenses + a quick "Add expense" flow + the running outstanding balance.
   const [detail,setDetail]=useState(null);
+  useEffect(()=>{ if(openId){ const c=(cashAdvances||[]).find(x=>x.id===openId); if(c) setDetail(c); onOpenConsumed&&onOpenConsumed(); } },[openId, cashAdvances]);
   // Sum expenses charged to each petty-cash row (matched by petty_cash_id).
   function expensesFor(row){ return (expenses||[]).filter(e => e.petty_cash_id === row.id); }
   function spentOn(row){ return expensesFor(row).reduce((s,e)=>s+Number(e.amount||0), 0); }
@@ -50053,7 +50057,7 @@ function monthBounds(ym){ // ym = 'YYYY-MM'
 }
 function fridaysIn(ym){ const [y,m]=ym.split('-').map(Number); const out=[]; const d=new Date(Date.UTC(y,m-1,1)); while(d.getUTCMonth()===m-1){ if(d.getUTCDay()===5) out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`); d.setUTCDate(d.getUTCDate()+1); } return out; }
 
-function AccountingAuditorView({ profile, profiles, salesOrders, soPayments, vouchers, rfps, cashAdvances, budgetRequests, bankTransactions, bankAccounts, reload, navTo }){
+function AccountingAuditorView({ profile, profiles, salesOrders, soPayments, vouchers, rfps, cashAdvances, budgetRequests, bankTransactions, bankAccounts, reload, navTo, onOpenFlag }){
   const canRun = ['admin','accounting','accounting_officer','agm'].includes(profile.role);
   const today = todayManila();
   const [ym,setYm]=useState(today.slice(0,7));
@@ -50266,7 +50270,7 @@ function AccountingAuditorView({ profile, profiles, salesOrders, soPayments, vou
                 <div className="text-sm font-medium text-slate-800">{f.title} <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded ${sev.cls}`}>{sev.label}</span></div>
                 <div className="text-xs text-slate-500">{f.detail}</div>
               </div>
-              {f.link_view && navTo && <button onClick={()=>navTo(f.link_view)} className="text-xs text-indigo-600 hover:underline shrink-0">Open →</button>}
+              {(f.ref_id||f.link_view) && <button onClick={()=>{ if(onOpenFlag) onOpenFlag(f); else if(navTo) navTo(f.link_view); }} className="text-xs text-indigo-600 hover:underline shrink-0">Open →</button>}
             </div>
           ); })}</div>}
         </div>
@@ -56852,6 +56856,17 @@ function App(){
   const [inboxDeliveryId,setInboxDeliveryId]=useState(null);
   const [inboxPRId,setInboxPRId]=useState(null);
   const [inboxRfpId,setInboxRfpId]=useState(null);
+  const [auditOpenCaId,setAuditOpenCaId]=useState(null);     // deep-link a cash advance from an audit flag
+  const [auditOpenBudgetId,setAuditOpenBudgetId]=useState(null); // deep-link a budget request from an audit flag
+  // Open the exact record behind an AI-Auditor flag, not just its list page.
+  function openAuditFlag(f){
+    if(!f) return;
+    if(f.ref_type==='rfp' && f.ref_id){ setView('rfps'); setInboxRfpId(f.ref_id); return; }
+    if(f.ref_type==='sales_order' && f.ref_id){ const so=(salesOrders||[]).find(x=>x.id===f.ref_id); if(so){ setView('sales-orders'); setInboxOpenSO(so); return; } }
+    if(f.ref_type==='cash_advance' && f.ref_id){ const c=(cashAdvances||[]).find(x=>x.id===f.ref_id); const v = c ? (c.source==='purchasing'?'pur-cash-advance':c.source==='owner'?'owner-advance':(c.kind==='petty_cash'?'petty-cash':'cash-advances')) : (f.link_view||'cash-advances'); setView(v); setAuditOpenCaId(f.ref_id); return; }
+    if(f.ref_type==='budget_request' && f.ref_id){ setView('budgets'); setAuditOpenBudgetId(f.ref_id); return; }
+    if(f.link_view){ setView(f.link_view); return; }
+  }
   const [inboxToolboxTab,setInboxToolboxTab]=useState(null); // open Toolbox on a specific tab from a notification
   const [inboxToolboxMeetingId,setInboxToolboxMeetingId]=useState(null); // deep-link straight into a specific meeting
   const [inboxToolboxInitiativeId,setInboxToolboxInitiativeId]=useState(null); // deep-link straight into a specific initiative
@@ -58573,11 +58588,11 @@ function App(){
         {view==='delivery-receipts' && <DeliveryReceiptsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} deliveryReceipts={deliveryReceipts} drItems={drItems} prodJobs={prodJobs} sampleJobs={sampleJobs} onCreate={(ctx)=>setDrCreateCtx(ctx||{})} onView={(d)=>setDrViewing(d)} onEdit={(d)=>setDrEditing(d)} reload={loadAll} />}
         {view==='subcon' && <SubconMonitoringView profile={profile} profiles={profiles} clients={clients} leads={leads} prodJobs={prodJobs} subcons={subcons} subconSends={subconSends} subconReturns={subconReturns} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} subconProjects={subconProjects} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='transmittals' && <TransmittalsView profile={profile} profiles={profiles} clients={clients} salesOrders={salesOrders} transmittals={transmittals} transmittalItems={transmittalItems} onCreate={(ctx)=>setTrnCreateCtx(ctx||{})} onView={(t)=>setTrnViewing(t)} onEdit={(t)=>setTrnEditing(t)} reload={loadAll} />}
-        {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} chartAccounts={chartAccounts} costCenters={costCenters} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="petty_cash" />}
-        {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="cash_advance" />}
-        {view==='pur-cash-advance' && <PurchasingCashAdvanceView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} chartAccounts={chartAccounts} reload={loadAll} />}
-        {view==='owner-advance' && <OwnerAdvanceView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} chartAccounts={chartAccounts} reload={loadAll} />}
+        {view==='budgets' && <BudgetRequestsView profile={profile} profiles={profiles} budgetRequests={budgetRequests} chartAccounts={chartAccounts} costCenters={costCenters} bankAccounts={bankAccounts} reload={loadAll} openId={auditOpenBudgetId} onOpenConsumed={()=>setAuditOpenBudgetId(null)} />}
+        {view==='petty-cash'    && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="petty_cash" openId={auditOpenCaId} onOpenConsumed={()=>setAuditOpenCaId(null)} />}
+        {view==='cash-advances' && <PettyCashView profile={profile} profiles={profiles} cashAdvances={cashAdvances} expenses={expenses} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} replenishments={pcReplenishments} reload={loadAll} kind="cash_advance" openId={auditOpenCaId} onOpenConsumed={()=>setAuditOpenCaId(null)} />}
+        {view==='pur-cash-advance' && <PurchasingCashAdvanceView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} chartAccounts={chartAccounts} reload={loadAll} openId={auditOpenCaId} onOpenConsumed={()=>setAuditOpenCaId(null)} />}
+        {view==='owner-advance' && <OwnerAdvanceView profile={profile} profiles={profiles} cashAdvances={cashAdvances} bankAccounts={bankAccounts} chartAccounts={chartAccounts} reload={loadAll} openId={auditOpenCaId} onOpenConsumed={()=>setAuditOpenCaId(null)} />}
         {view==='cash-position' && <CashPositionView bankAccounts={bankAccounts} bankTransactions={bankTransactions} salesOrders={salesOrders} rfps={rfps} budgetRequests={budgetRequests} cashAdvances={cashAdvances} />}
         {view==='cash-flow' && <CashFlowView bankAccounts={bankAccounts} bankTransactions={bankTransactions} expenses={expenses} />}
         {/* Finance Sprint 3 routes */}
@@ -58610,7 +58625,7 @@ function App(){
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} rfps={rfps} otherCollections={otherCollections} supplierReturns={supplierReturns} />}
         {view==='other-collections' && <OtherCollectionsView profile={profile} profiles={profiles} otherCollections={otherCollections} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
-        {view==='ai-auditor' && <AccountingAuditorView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} vouchers={vouchers} rfps={rfps} cashAdvances={cashAdvances} budgetRequests={budgetRequests} bankTransactions={bankTransactions} bankAccounts={bankAccounts} reload={loadAll} navTo={navTo} />}
+        {view==='ai-auditor' && <AccountingAuditorView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} vouchers={vouchers} rfps={rfps} cashAdvances={cashAdvances} budgetRequests={budgetRequests} bankTransactions={bankTransactions} bankAccounts={bankAccounts} reload={loadAll} navTo={navTo} onOpenFlag={openAuditFlag} />}
         {view==='supplier-returns' && <SupplierReturnsView profile={profile} profiles={profiles} suppliers={suppliers} items={items} orders={orders} bankAccounts={bankAccounts} chartAccounts={chartAccounts} supplierReturns={supplierReturns} reload={loadAll} openPO={returnFromPO} onClearPO={()=>setReturnFromPO(null)} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} rfps={rfps} otherCollections={otherCollections} supplierReturns={supplierReturns} reload={loadAll} />}
