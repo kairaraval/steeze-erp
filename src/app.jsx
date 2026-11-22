@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 1001 · New: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 1002 · AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50058,16 +50058,21 @@ function AccountingAuditorView({ profile, profiles, salesOrders, soPayments, vou
   const today = todayManila();
   const [ym,setYm]=useState(today.slice(0,7));
   const [pr,setPr]=useState({ runs:[], payouts:[], subcon:[] });
+  const [fin,setFin]=useState({ checks:[], invoices:[], journals:[], expenses:[] });
   const [reports,setReports]=useState([]);
   const [printing,setPrinting]=useState(null);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   useEffect(()=>{ (async()=>{
-    try{ const [a,b,c,d]=await Promise.all([
+    try{ const [a,b,c,d,ck,iv,je,ex]=await Promise.all([
       sb.from('payroll_runs').select('id,cycle,cutoff_key,period_start,period_end,pay_date,status,totals,agm_approved_at').is('deleted_at',null),
       sb.from('payroll_payouts').select('id,kind,period_start,period_end,total_amount,created_at').is('deleted_at',null),
       sb.from('subcon_payroll_batches').select('id,number,period_from,period_to,total_amount,status,created_at').is('deleted_at',null),
       sb.from('audit_reports').select('*').is('deleted_at',null).order('period_start',{ascending:false}),
-    ]); setPr({ runs:a.data||[], payouts:b.data||[], subcon:c.data||[] }); setReports(d.data||[]); }catch(_){}
+      sb.from('checks').select('id,check_no,status,date_issued,date_cleared,payee,amount,rfp_id,voucher_id').is('deleted_at',null),
+      sb.from('invoices').select('id,number,status,total,balance_due,amount_due,issue_date,due_date,client_name'),
+      sb.from('journal_entries').select('id,number,date,status,total_debit,total_credit').is('deleted_at',null),
+      sb.from('expenses').select('id,description,vendor,category,gl_account_code,amount,date').is('deleted_at',null),
+    ]); setPr({ runs:a.data||[], payouts:b.data||[], subcon:c.data||[] }); setReports(d.data||[]); setFin({ checks:ck.data||[], invoices:iv.data||[], journals:je.data||[], expenses:ex.data||[] }); }catch(_){}
   })(); },[]);
   const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
 
@@ -50107,9 +50112,30 @@ function AccountingAuditorView({ profile, profiles, salesOrders, soPayments, vou
     const rfpNoVoucher=rfpsPaid.filter(r=>!r.voucher_id);
     addCheck('rfp','Paid RFPs have a voucher', rfpNoVoucher.length===0, `${rfpsPaid.length} paid · ${rfpNoVoucher.length} missing a voucher`);
     rfpNoVoucher.forEach(r=> flag('red','Paid RFP without a voucher',`${r.number||'RFP'} (${peso(r.amount)}) marked paid but has no voucher recorded.`,'rfps','rfp',r.id));
-    const caOpen=(cashAdvances||[]).filter(c=>!c.deleted_at && c.status==='released' && c.date && c.date<=`${end}` ).filter(c=>{ const age=(new Date(today)-new Date(String(c.date).slice(0,10)))/864e5; return age>14; });
-    addCheck('ca','Cash advances liquidated on time', caOpen.length===0, caOpen.length?`${caOpen.length} released >14 days ago, still open`:'No overdue liquidations');
-    caOpen.forEach(c=> flag('amber','Cash advance not liquidated',`${c.number||'CA'} (${peso(c.amount)}) released ${fmtDate(c.date)} — still not liquidated.`,'pur-cash-advance','cash_advance',c.id));
+    // 4a) One-shot advances (Purchasing DV + Owner) — liquidate within 2 days of request
+    const GRACE=2; const ageDays=(d)=>(new Date(today)-new Date(String(d||today).slice(0,10)))/864e5;
+    const oneShot=(cashAdvances||[]).filter(c=>!c.deleted_at && c.kind==='cash_advance');
+    const osOverdue=oneShot.filter(c=>!['liquidated','cancelled'].includes(c.status) && ageDays(c.date)>GRACE);
+    addCheck('ca','DV / Owner advances liquidated within 2 days', osOverdue.length===0, osOverdue.length?`${osOverdue.length} advance(s) past the 2-day window, not yet liquidated`:'All liquidated on time');
+    osOverdue.forEach(c=>{ const link = c.source==='purchasing'?'pur-cash-advance':(c.source==='owner'?'owner-advance':'cash-advances'); flag('red','Advance not liquidated (2-day rule)',`${c.number||'advance'} · ${c.custodian_name||''} (${peso(c.amount)}) requested ${fmtDate(c.date)}, status "${c.status}" — ${Math.floor(ageDays(c.date))} days, no liquidation.`,link,'cash_advance',c.id); });
+
+    // 4b) Returned cash accounted for — liquidated advances with a return must say where it went
+    const liqRet=(cashAdvances||[]).filter(c=>!c.deleted_at && c.status==='liquidated' && Number(c.amount_returned||0)>0.5 && inMonth(c.liquidated_at||c.date));
+    const retUnaccounted=liqRet.filter(c=>!c.return_destination && !c.excess_return_method);
+    const retTotal=liqRet.reduce((s,c)=>s+Number(c.amount_returned||0),0);
+    addCheck('caret','Returned cash accounted for', retUnaccounted.length===0, liqRet.length?`${peso(retTotal)} returned across ${liqRet.length} advance(s)${retUnaccounted.length?` · ${retUnaccounted.length} missing destination`:''}`:'No returns this month');
+    retUnaccounted.forEach(c=>{ const link = c.source==='purchasing'?'pur-cash-advance':(c.source==='owner'?'owner-advance':'cash-advances'); flag('amber','Returned cash — destination not tagged',`${c.number||'advance'} returned ${peso(c.amount_returned)} but it isn't tagged as kept on hand or deposited to a bank.`,link,'cash_advance',c.id); });
+
+    // 4c) Petty cash — revolving float, not the 2-day rule. Flag stale open floats only.
+    const petty=(cashAdvances||[]).filter(c=>!c.deleted_at && c.kind==='petty_cash');
+    const pettyStale=petty.filter(c=>c.status==='open' && ageDays(c.liquidated_at||c.created_at||c.date)>45);
+    addCheck('petty','Petty cash floats current', pettyStale.length===0, `${petty.filter(c=>c.status==='open').length} open float(s)${pettyStale.length?` · ${pettyStale.length} stale (>45d)`:''}`);
+    pettyStale.forEach(c=> flag('amber','Petty cash float not liquidated',`${c.number||'petty cash'} (${peso(c.amount)}) open with no liquidation for over 45 days.`,'petty-cash','cash_advance',c.id));
+
+    // 4d) Budget requests — approved but not liquidated (spent) within 2 days
+    const brOverdue=(budgetRequests||[]).filter(b=>!b.deleted_at && b.status==='approved' && ageDays(b.approved_at||b.date)>GRACE);
+    addCheck('br','Approved budgets liquidated within 2 days', brOverdue.length===0, brOverdue.length?`${brOverdue.length} approved budget(s) not yet spent/liquidated`:'All approved budgets liquidated');
+    brOverdue.forEach(b=> flag('amber','Approved budget not liquidated',`${b.department||''} · ${(b.purpose||'').slice(0,40)} (${peso(b.amount)}) approved ${fmtDate(b.approved_at||b.date)} — not yet liquidated.`,'budgets','budget_request',b.id));
 
     // 5) AR integrity + receivables aging
     const liveSOs=(salesOrders||[]).filter(s=>!s.deleted_at && !s.voided_at && s.status!=='cancelled');
@@ -50131,11 +50157,39 @@ function AccountingAuditorView({ profile, profiles, salesOrders, soPayments, vou
     addCheck('dup','No duplicate-looking payments', dups.length===0, dups.length?`${dups.length} possible duplicate payment(s)`:'None detected');
     dups.forEach(p=>{ const s=liveSOs.find(x=>x.id===p.sales_order_id); flag('amber','Possible duplicate payment',`Two payments of ${peso(p.amount)} on ${fmtDate(String(p.date||p.paid_at||'').slice(0,10))} for ${s?.number||'an SO'}.`,'sales-orders','sales_order',p.sales_order_id); });
 
+    // 8) Check monitoring — outstanding/stale checks + unlinked checks
+    const checksLive=(fin.checks||[]).filter(c=>c.status!=='cancelled');
+    const outstanding=checksLive.filter(c=>c.status==='issued');
+    const staleChecks=outstanding.filter(c=>ageDays(c.date_issued)>60);
+    const unlinked=outstanding.filter(c=>!c.voucher_id && !c.rfp_id);
+    const outTotal=outstanding.reduce((s,c)=>s+Number(c.amount||0),0);
+    addCheck('checks','Issued checks tracked & clearing', staleChecks.length===0, `${outstanding.length} outstanding (${peso(outTotal)})${staleChecks.length?` · ${staleChecks.length} uncleared >60 days`:''}`);
+    staleChecks.forEach(c=> flag('amber','Check outstanding >60 days',`Check #${c.check_no||''} to ${c.payee||''} (${peso(c.amount)}) issued ${fmtDate(c.date_issued)} still not cleared.`,'checks','check',c.id));
+    unlinked.forEach(c=> flag('info','Check not linked to a voucher/RFP',`Check #${c.check_no||''} to ${c.payee||''} (${peso(c.amount)}) has no linked voucher or RFP.`,'checks','check',c.id));
+
+    // 9) Journal entries balanced
+    const jeBad=(fin.journals||[]).filter(j=>j.status!=='cancelled' && j.status!=='draft' && inMonth(j.date) && Math.abs(Number(j.total_debit||0)-Number(j.total_credit||0))>1);
+    addCheck('je','Journal entries balanced', jeBad.length===0, jeBad.length?`${jeBad.length} unbalanced entry(ies)`:'All balanced');
+    jeBad.forEach(j=> flag('red','Unbalanced journal entry',`${j.number||'JE'} on ${fmtDate(j.date)}: debit ${peso(j.total_debit)} ≠ credit ${peso(j.total_credit)}.`,'journal','journal',j.id));
+
+    // 10) Overdue invoices (billed, past due, still owing)
+    const ovInv=(fin.invoices||[]).filter(i=>['issued','partial'].includes(i.status) && i.due_date && String(i.due_date)<today && Number(i.balance_due!=null?i.balance_due:(Number(i.total||0)-Number(i.payments_received||0)))>1);
+    const ovTotal=ovInv.reduce((s,i)=>s+Number(i.balance_due!=null?i.balance_due:(Number(i.total||0)-Number(i.payments_received||0))),0);
+    addCheck('inv','Invoices within terms', ovInv.length===0, ovInv.length?`${ovInv.length} overdue invoice(s) · ${peso(ovTotal)}`:'None past due');
+    if(ovInv.length) flag('info','Invoices past due',`${ovInv.length} billed invoice(s) past their due date, totalling ${peso(ovTotal)} still owing — these are the receivables to chase (see AR aging).`,'invoices');
+
+    // 11) Expenses have an accounting category
+    const expMonth=(fin.expenses||[]).filter(e=>inMonth(e.date));
+    const expNoCat=expMonth.filter(e=>!e.gl_account_code && !e.category);
+    addCheck('exp','Expenses classified to an account', expNoCat.length===0, `${expMonth.length} expense(s) this month${expNoCat.length?` · ${expNoCat.length} with no category`:''}`);
+    expNoCat.forEach(e=> flag('amber','Expense not classified',`${e.description||e.vendor||'Expense'} (${peso(e.amount)}) on ${fmtDate(e.date)} has no accounting category.`,'expense-log','expense',e.id));
+
     const metrics={ ar_total:arTotal, ar_0_30:ar0, ar_31_60:ar30, ar_61_90:ar60, ar_90p:ar90,
-      rfp_paid:rfpsPaid.length, so_count:liveSOs.length, so_outstanding:arTotal };
+      rfp_paid:rfpsPaid.length, so_count:liveSOs.length, so_outstanding:arTotal,
+      checks_outstanding:outTotal, invoices_overdue:ovTotal, cash_returned:retTotal };
     const pass=checks.filter(c=>c.status==='pass').length, fail=checks.filter(c=>c.status==='fail').length;
     return { label, start, end, checks, flags, metrics, pass, fail };
-  }, [ym, pr, salesOrders, soPayments, rfps, cashAdvances]);
+  }, [ym, pr, fin, salesOrders, soPayments, rfps, cashAdvances, budgetRequests]);
 
   async function saveReport(auto=false){
     if(!canRun) return;
@@ -50182,6 +50236,11 @@ function AccountingAuditorView({ profile, profiles, salesOrders, soPayments, vou
         <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">To review</div><div className="text-2xl font-bold text-amber-600">{sevCount('amber')}</div></div>
         <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Outstanding AR</div><div className="text-2xl font-bold text-slate-800">{peso(audit.metrics.ar_total||0)}</div></div>
         <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">90+ days overdue</div><div className="text-2xl font-bold text-rose-600">{peso(audit.metrics.ar_90p||0)}</div></div>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-5 max-w-2xl">
+        <div className="rounded-xl border bg-white p-3"><div className="text-[10px] uppercase text-slate-400">Checks outstanding</div><div className="text-lg font-bold text-slate-800">{peso(audit.metrics.checks_outstanding||0)}</div></div>
+        <div className="rounded-xl border bg-white p-3"><div className="text-[10px] uppercase text-slate-400">Invoices overdue</div><div className="text-lg font-bold text-amber-600">{peso(audit.metrics.invoices_overdue||0)}</div></div>
+        <div className="rounded-xl border bg-white p-3"><div className="text-[10px] uppercase text-slate-400">Cash returned (month)</div><div className="text-lg font-bold text-emerald-700">{peso(audit.metrics.cash_returned||0)}</div></div>
       </div>
 
       <div className="grid md:grid-cols-2 gap-4">
