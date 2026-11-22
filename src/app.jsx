@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 1010 · Moved the AI Auditor to the top of the Finance menu, right under Home. · Build 1009: AI Auditor: the overdue receivables now have their own collection list with a filter by sales manager — pick a manager to see only their overdue orders (client, due date, days late, amount), with a running total, each opening the order. · Build 1008: AI Accounting Auditor now does an intensive AR audit: each order's payment deadline (invoice due date, else delivery + payment terms like Net 30/15/60) is checked, total AR and overdue AR are broken down per sales manager (so you see who has the most to collect), and the biggest/oldest overdue receivables are flagged as a collection priority list — each opening the order. · Build 1007: AI Sales Analyst now audits the sales book too: flags samples delivered free to clients that aren't ₱1M/yr clients (your free-sample rule) with no approved sample charge on record; runs discipline checks (open deals with no value or no close date, won deals with no sales order, unassigned leads, estimates sent >30 days and undecided); and adds a Sales Manager Scorecard — per manager: open deals, pipeline, win rate, stalled deals, past-close deals, delivered-unpaid, and free samples — so you can audit each manager's follow-through. · Build 1006: New: AI Sales Analyst (Executive → AI Sales Analyst, for Admin & AGM). A live read on the number: progress and forecast to ₱100M (booked YTD, gap, projected year-end at recent pace, weekly run-rate needed), open pipeline by stage with win rate and average deal size, deal alerts (big deals at risk, stalled with no movement, past expected close, closing this week — each opening the lead), and client insight (top clients, repeat vs new, and a win-back list of clients gone quiet 90+ days). Run & save a weekly brief that notifies leadership. Deterministic analytics for now; the AI write-up comes next. · Build 1005: AI Auditor flagged check deep-links to that specific check’s details. · Build 1004: AI Auditor payroll check reworked for how payroll actually works today: payroll is run in Sprout and Accounting records each weekly & monthly payroll here as a Journal Entry or RFP. The auditor now confirms a payroll JV/RFP exists for every Friday (weekly) and around the 15th and month-end (monthly), instead of looking at the unused OS payroll module — so it correctly recognises the WEEK 1/2 and monthly payroll JVs. · Build 1003: AI Auditor 'Open →' on a flagged item now jumps straight to that exact record — the specific RFP, sales order, cash advance (DV / owner / petty cash) or budget request opens in its own screen, instead of dumping you on the whole list page. · Build 1002: AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 1011 · New: AI Purchasing Auditor (Purchasing → AI Auditor, for Purchasing, Admin & AGM). A read-only helper that keeps the PR→PO→receive→pay flow clean and spending in check. Procurement hygiene: approved purchase requests stuck without a PO, POs past their expected delivery and still not received, received-but-unpaid POs, anything paid before the goods arrived, stale drafts, and short deliveries. Spend & price control: spend this month, price variance on items bought at very different prices across POs (shows the range + last price paid), and possible duplicate POs. Supplier scorecard: on-time delivery %, short deliveries, returns, and open supplier credit, ranked by spend. Buy-smart: a reorder buy-list of items below their reorder point that aren't already on a PO, plus negative stock and no-supplier flags. Every flag opens the exact PO. Run & save a report (notifies Purchasing) and print it to PDF. · Build 1010: Moved the AI Auditor to the top of the Finance menu, right under Home. · Build 1009: AI Auditor: the overdue receivables now have their own collection list with a filter by sales manager — pick a manager to see only their overdue orders (client, due date, days late, amount), with a running total, each opening the order. · Build 1008: AI Accounting Auditor now does an intensive AR audit: each order's payment deadline (invoice due date, else delivery + payment terms like Net 30/15/60) is checked, total AR and overdue AR are broken down per sales manager (so you see who has the most to collect), and the biggest/oldest overdue receivables are flagged as a collection priority list — each opening the order. · Build 1007: AI Sales Analyst now audits the sales book too: flags samples delivered free to clients that aren't ₱1M/yr clients (your free-sample rule) with no approved sample charge on record; runs discipline checks (open deals with no value or no close date, won deals with no sales order, unassigned leads, estimates sent >30 days and undecided); and adds a Sales Manager Scorecard — per manager: open deals, pipeline, win rate, stalled deals, past-close deals, delivered-unpaid, and free samples — so you can audit each manager's follow-through. · Build 1006: New: AI Sales Analyst (Executive → AI Sales Analyst, for Admin & AGM). A live read on the number: progress and forecast to ₱100M (booked YTD, gap, projected year-end at recent pace, weekly run-rate needed), open pipeline by stage with win rate and average deal size, deal alerts (big deals at risk, stalled with no movement, past expected close, closing this week — each opening the lead), and client insight (top clients, repeat vs new, and a win-back list of clients gone quiet 90+ days). Run & save a weekly brief that notifies leadership. Deterministic analytics for now; the AI write-up comes next. · Build 1005: AI Auditor flagged check deep-links to that specific check’s details. · Build 1004: AI Auditor payroll check reworked for how payroll actually works today: payroll is run in Sprout and Accounting records each weekly & monthly payroll here as a Journal Entry or RFP. The auditor now confirms a payroll JV/RFP exists for every Friday (weekly) and around the 15th and month-end (monthly), instead of looking at the unused OS payroll module — so it correctly recognises the WEEK 1/2 and monthly payroll JVs. · Build 1003: AI Auditor 'Open →' on a flagged item now jumps straight to that exact record — the specific RFP, sales order, cash advance (DV / owner / petty cash) or budget request opens in its own screen, instead of dumping you on the whole list page. · Build 1002: AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -36462,8 +36462,9 @@ function nextPONumber(allOrders, dateStr){
   return `PO-${dateStr}-${String(n).padStart(3,'0')}`;
 }
 
-function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, leads, clients, reload, openFromPR, onClearPR, onReturn }){
+function PurchaseOrdersView({ profile, profiles, orders, items, suppliers, requests, leads, clients, reload, openFromPR, onClearPR, onReturn, openId, onOpenConsumed }){
   const [filter,setFilter]=useState(''); const [editing,setEditing]=useState(null); const [creating,setCreating]=useState(false); const [receiving,setReceiving]=useState(null); const [printing,setPrinting]=useState(null); const [search,setSearch]=useState('');
+  useEffect(()=>{ if(openId){ const po=(orders||[]).find(o=>o.id===openId); if(po) setEditing(po); onOpenConsumed && onOpenConsumed(); } },[openId]);
   // Delete (soft-delete) is ADMIN-ONLY. Purchasing / Purchasing Admin can CANCEL
   // a PO instead — keeps the record, just marks it Cancelled.
   const isAdmin = profile.role === 'admin';
@@ -50694,6 +50695,210 @@ function SalesAnalystView({ profile, profiles, leads, clients, salesOrders, soPa
   );
 }
 
+/* ═══════════════════ AI PURCHASING AUDITOR (Phase 1) ═══════════════════════
+   Procurement's auditor + buying assistant: keeps the PR→PO→receive→pay flow
+   clean, controls spend & price, scores suppliers, and tops up stock. Read-only,
+   deterministic. Deep-links flags to the PO.                                  */
+function PurchasingAuditorView({ profile, profiles, orders, requests, suppliers, items, stockMovements, supplierReturns, reload, navTo, onOpenPo }){
+  const canRun = ['admin','agm','purchasing','purchasing_admin','purchasing_personnel'].includes(profile.role);
+  const today = todayManila();
+  const [reports,setReports]=useState([]);
+  const [printing,setPrinting]=useState(null);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('purchasing_reports').select('*').is('deleted_at',null).order('period_start',{ascending:false}); setReports(data||[]); }catch(_){} })(); },[]);
+  const supNm=(id)=>(suppliers||[]).find(s=>s.id===id)?.company||'—';
+  const ageDays=(d)=>Math.floor((new Date(today)-new Date(String(d||today).slice(0,10)))/864e5);
+
+  const a = useMemo(()=>{
+    const ym=today.slice(0,7);
+    const live=(orders||[]).filter(o=>!o.deleted_at);
+    const active=live.filter(o=>o.status!=='cancelled');
+    const lineQty=(o)=>(o.lines||[]).reduce((s,l)=>s+Number(l.qty||0),0);
+    const lineRecv=(o)=>(o.lines||[]).reduce((s,l)=>s+Number(l.qty_received||0),0);
+    const checks=[]; const flags=[];
+    const chk=(key,lbl,ok,detail)=>checks.push({ key, label:lbl, status: ok==null?'na':(ok?'pass':'fail'), detail });
+    const flag=(sev,title,detail,po)=>flags.push({ severity:sev, title, detail, po_id:po?.id, po });
+
+    // 1) Hygiene
+    const approvedStuck=(requests||[]).filter(r=>!r.deleted_at && r.status==='approved' && ageDays(r.created_at)>5);
+    chk('pr','Approved requests turned into POs', approvedStuck.length===0, `${approvedStuck.length} approved PR(s) waiting >5 days to be ordered`);
+    const overdue=active.filter(o=>['open','partial'].includes(o.status) && o.expected_date && String(o.expected_date)<today);
+    chk('deliv','POs delivered on time', overdue.length===0, overdue.length?`${overdue.length} PO(s) past their expected delivery`:'No overdue deliveries');
+    overdue.sort((x,y)=>String(x.expected_date).localeCompare(String(y.expected_date))).slice(0,12).forEach(o=>flag(ageDays(o.expected_date)>14?'red':'amber','PO delivery overdue',`${o.number||'PO'} · ${supNm(o.supplier_id)} (${peso(o.total)}) expected ${fmtDate(o.expected_date)} — ${ageDays(o.expected_date)} days late, not received.`,o));
+    const recvUnpaid=active.filter(o=>['received','partial'].includes(o.status) && ['unpaid','partial'].includes(o.payment_status||''));
+    const recvUnpaidTot=recvUnpaid.reduce((s,o)=>s+Number(o.total||0),0);
+    chk('pay','Received POs are paid', recvUnpaid.length===0, recvUnpaid.length?`${recvUnpaid.length} received PO(s) unpaid · ${peso(recvUnpaidTot)} owed to suppliers`:'All received POs paid');
+    recvUnpaid.sort((x,y)=>Number(y.total||0)-Number(x.total||0)).slice(0,12).forEach(o=>flag('amber','Received — supplier not paid',`${o.number||'PO'} · ${supNm(o.supplier_id)} received but ${o.payment_status||'unpaid'} (${peso(o.total)})${o.rfp_id?'':' · no RFP raised'}.`,o));
+    const paidNotRecv=active.filter(o=>o.payment_status==='paid' && !['received','cancelled'].includes(o.status));
+    chk('prepay','No POs paid before receiving', paidNotRecv.length===0, paidNotRecv.length?`${paidNotRecv.length} PO(s) paid but goods not received`:'None paid ahead of delivery');
+    paidNotRecv.slice(0,10).forEach(o=>flag('red','Paid before goods received',`${o.number||'PO'} · ${supNm(o.supplier_id)} (${peso(o.total)}) is paid but status "${o.status}" — confirm goods arrive.`,o));
+    const oldDrafts=active.filter(o=>o.status==='draft' && ageDays(o.created_at)>7);
+    chk('draft','No stale draft POs', oldDrafts.length===0, `${oldDrafts.length} draft PO(s) older than 7 days`);
+    const shortRecv=active.filter(o=>o.status==='received' && lineRecv(o)>0 && lineRecv(o) < lineQty(o)-0.01);
+    chk('short','Deliveries received in full', shortRecv.length===0, `${shortRecv.length} PO(s) received short of the quantity ordered`);
+    shortRecv.slice(0,10).forEach(o=>flag('amber','Short delivery',`${o.number||'PO'} · ${supNm(o.supplier_id)}: received ${lineRecv(o).toFixed(0)} of ${lineQty(o).toFixed(0)} ordered.`,o));
+
+    // 2) Spend & price
+    const spendTotal=active.reduce((s,o)=>s+Number(o.total||0),0);
+    const spendMTD=active.filter(o=>String(o.date||'').slice(0,7)===ym).reduce((s,o)=>s+Number(o.total||0),0);
+    // price variance per item across PO lines
+    const itemPrices={}; active.forEach(o=>(o.lines||[]).forEach(l=>{ if(!l.item_id||!(Number(l.unit_cost)>0)) return; const g=itemPrices[l.item_id]||(itemPrices[l.item_id]={ name:(items||[]).find(it=>it.id===l.item_id)?.name||l.description||'item', n:0, sum:0, min:Infinity, max:0, lastCost:0, lastDate:'' }); const c=Number(l.unit_cost); g.n++; g.sum+=c; g.min=Math.min(g.min,c); g.max=Math.max(g.max,c); if(String(o.date||'')>g.lastDate){ g.lastDate=String(o.date||''); g.lastCost=c; } }));
+    const priceVar=Object.values(itemPrices).filter(g=>g.n>=3 && g.max>(g.sum/g.n)*1.25).map(g=>({ ...g, avg:g.sum/g.n })).sort((x,y)=>(y.max-y.avg)-(x.max-x.avg));
+    chk('price','Stable prices on repeat items', priceVar.length===0, `${priceVar.length} item(s) with >25% price spread across POs`);
+    priceVar.slice(0,10).forEach(g=>flags.push({ severity:'info', title:'Price variance', detail:`${g.name}: bought between ${peso(g.min)} and ${peso(g.max)} (avg ${peso(Math.round(g.avg))}). Last paid ${peso(g.lastCost)}.` }));
+    // duplicate POs
+    const dkey={}; const dups=[]; active.forEach(o=>{ const k=`${o.supplier_id}|${Math.round(Number(o.total||0))}|${String(o.date||'').slice(0,10)}`; if(dkey[k]) dups.push(o); else dkey[k]=true; });
+    chk('dup','No duplicate-looking POs', dups.length===0, `${dups.length} possible duplicate PO(s)`);
+    dups.forEach(o=>flag('amber','Possible duplicate PO',`${o.number||'PO'} · ${supNm(o.supplier_id)} (${peso(o.total)}) on ${fmtDate(o.date)} looks like a duplicate.`,o));
+    const bySup={}; active.forEach(o=>{ const g=bySup[o.supplier_id||'__']||(bySup[o.supplier_id||'__']={ id:o.supplier_id, spend:0, orders:0, received:0, onTime:0, onTimeDen:0, short:0 }); g.spend+=Number(o.total||0); g.orders++; if(o.status==='received'){ g.received++; if(o.expected_date&&o.received_at){ g.onTimeDen++; if(String(o.received_at).slice(0,10)<=String(o.expected_date)) g.onTime++; } if(lineRecv(o)>0 && lineRecv(o)<lineQty(o)-0.01) g.short++; } });
+    (supplierReturns||[]).filter(r=>!r.deleted_at).forEach(r=>{ const g=bySup[r.supplier_id]; if(g){ g.returns=(g.returns||0)+1; g.returnVal=(g.returnVal||0)+Number(r.total||0); if(r.settlement==='credit'&&!r.credit_used_at) g.openCredit=(g.openCredit||0)+Number(r.total||0); } });
+    const topSuppliers=Object.values(bySup).map(g=>({ ...g, name:g.id?supNm(g.id):'—', onTimeRate:g.onTimeDen>0?g.onTime/g.onTimeDen:null })).sort((x,y)=>y.spend-x.spend);
+
+    // 3) Inventory / buy-smart
+    const openPoItems=new Set(); active.filter(o=>['open','partial','draft'].includes(o.status)).forEach(o=>(o.lines||[]).forEach(l=>{ if(l.item_id) openPoItems.add(l.item_id); }));
+    const lastMove={}; (stockMovements||[]).forEach(m=>{ const d=String(m.created_at||m.date||'').slice(0,10); if(d>(lastMove[m.item_id]||'')) lastMove[m.item_id]=d; });
+    const belowReorder=(items||[]).filter(it=>Number(it.reorder||0)>0 && Number(it.qty||0)<Number(it.reorder||0));
+    const toBuy=belowReorder.filter(it=>!openPoItems.has(it.id)).map(it=>({ id:it.id, name:it.name, unit:it.unit, qty:Number(it.qty||0), reorder:Number(it.reorder||0), need:Math.max(0,Number(it.reorder||0)-Number(it.qty||0)), supplier:it.supplier_id?supNm(it.supplier_id):'', cost:Number(it.cost||0) })).sort((x,y)=>y.need-x.need);
+    chk('reorder','Low stock is on order', toBuy.length===0, `${belowReorder.length} item(s) below reorder · ${toBuy.length} not yet on a PO`);
+    const negStock=(items||[]).filter(it=>Number(it.qty||0)<-0.001);
+    chk('neg','No negative stock', negStock.length===0, negStock.length?`${negStock.length} item(s) with negative on-hand`:'No negative balances');
+    const noSup=(items||[]).filter(it=>!it.supplier_id && Number(it.qty||0)>0);
+    chk('sup','Stocked items have a supplier', noSup.length===0, `${noSup.length} stocked item(s) with no supplier linked`);
+    const slow=(items||[]).filter(it=>Number(it.qty||0)>0 && (!lastMove[it.id] || ageDays(lastMove[it.id])>90));
+    chk('slow','Little dead stock', slow.length<=5, `${slow.length} item(s) on hand with no movement in 90+ days`);
+
+    const metrics={ spendTotal, spendMTD, recvUnpaid:recvUnpaidTot, overdueCt:overdue.length, toBuy:toBuy.length, belowReorder:belowReorder.length, negStock:negStock.length, poActive:active.length };
+    const pass=checks.filter(c=>c.status==='pass').length, fail=checks.filter(c=>c.status==='fail').length;
+    return { checks, flags, metrics, topSuppliers, toBuy, pass, fail };
+  }, [orders, requests, suppliers, items, stockMovements, supplierReturns, today]);
+
+  async function saveReport(auto=false){
+    if(!canRun) return; setBusy(true); setMsg('');
+    try{
+      const m=a.metrics; const red=a.flags.filter(f=>f.severity==='red').length;
+      const summary=`${a.flags.length} item(s) flagged (${red} urgent) · ${peso(m.recvUnpaid)} owed to suppliers · ${m.overdueCt} late deliveries · ${m.toBuy} items to reorder · ${peso(m.spendMTD)} spent this month.`;
+      const wb=monthBounds(today.slice(0,7));
+      const { data:ins, error }=await sb.from('purchasing_reports').insert({ period_label:wb.label, period_start:wb.start, period_end:wb.end, generated_by:profile.id, auto, summary, pass_count:a.pass, fail_count:a.fail, flag_count:a.flags.length, metrics:m, sections:{ checks:a.checks, flags:a.flags.map(({po,...r})=>r), topSuppliers:a.topSuppliers, toBuy:a.toBuy } }).select('*').single();
+      if(error) throw error;
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['purchasing','purchasing_admin','purchasing_personnel','admin']); const rows=(ppl||[]).filter(x=>x.id!==profile.id).map(x=>({ recipient_id:x.id, actor_id:profile.id, type:'system', text:`🛠 Purchasing audit — ${summary}`, link_view:'purchasing-auditor', ref_type:'purchasing_report', ref_id:ins.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      setReports(rs=>[ins,...rs]); setBusy(false); setMsg('Saved and sent to Purchasing.');
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  async function delReport(r){ if(!confirm('Delete this report?')) return; await sb.from('purchasing_reports').update({ deleted_at:new Date().toISOString() }).eq('id',r.id); setReports(rs=>rs.filter(x=>x.id!==r.id)); }
+  const m=a.metrics;
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🛠 AI Purchasing Auditor</h1><p className="text-slate-500 text-sm">Procurement hygiene, spend &amp; price control, supplier scorecard, and what to reorder. Read-only.</p></div>
+          <div className="flex items-center gap-2">
+            {canRun && <button onClick={()=>saveReport(false)} disabled={busy} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'📌 Run & save report'}</button>}
+            <button onClick={()=>setPrinting({ label:monthBounds(today.slice(0,7)).label, checks:a.checks, flags:a.flags, metrics:m, topSuppliers:a.topSuppliers, toBuy:a.toBuy })} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 PDF</button>
+          </div>
+        </div>
+        {msg && <div className="text-xs text-emerald-700 mt-2">{msg}</div>}
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Spend this month</div><div className="text-2xl font-bold text-indigo-700">{peso(m.spendMTD)}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Owed to suppliers</div><div className="text-2xl font-bold text-amber-600">{peso(m.recvUnpaid)}</div><div className="text-[10px] text-slate-400">received, unpaid</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Late deliveries</div><div className="text-2xl font-bold text-rose-600">{m.overdueCt}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">To reorder</div><div className="text-2xl font-bold text-slate-800">{m.toBuy}</div><div className="text-[10px] text-slate-400">{m.belowReorder} below reorder</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Negative stock</div><div className={`text-2xl font-bold ${m.negStock>0?'text-rose-600':'text-slate-800'}`}>{m.negStock}</div></div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">✓ Purchasing checklist</div>
+          <div className="divide-y">{a.checks.map(c=>(
+            <div key={c.key} className="px-4 py-2.5 flex items-start gap-3">
+              <span className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0 ${c.status==='pass'?'bg-emerald-500':c.status==='fail'?'bg-rose-500':'bg-slate-300'}`}>{c.status==='pass'?'✓':c.status==='fail'?'✕':'–'}</span>
+              <div className="min-w-0"><div className="text-sm font-medium text-slate-800">{c.label}</div><div className="text-xs text-slate-500">{c.detail}</div></div>
+            </div>
+          ))}</div>
+        </div>
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">⚠ Flagged items ({a.flags.length})</div>
+          {a.flags.length===0 ? <div className="p-8 text-center text-slate-400 text-sm">Clean purchasing book. 🎉</div> :
+          <div className="divide-y max-h-[30rem] overflow-y-auto">{a.flags.map((f,i)=>{ const sev=AUDIT_SEV[f.severity]||AUDIT_SEV.info; return (
+            <div key={i} className="px-4 py-2.5 flex items-start gap-3 hover:bg-slate-50">
+              <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${sev.dot}`}></span>
+              <div className="flex-1 min-w-0"><div className="text-sm font-medium text-slate-800">{f.title} <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded ${sev.cls}`}>{sev.label}</span></div><div className="text-xs text-slate-500">{f.detail}</div></div>
+              {f.po && onOpenPo && <button onClick={()=>onOpenPo(f.po)} className="text-xs text-indigo-600 hover:underline shrink-0">Open →</button>}
+            </div>
+          ); })}</div>}
+        </div>
+      </div>
+
+      {/* Buy list */}
+      <div className="bg-white border rounded-xl overflow-hidden mt-4">
+        <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm flex items-center justify-between"><span>🛒 Reorder buy-list ({a.toBuy.length})</span>{navTo && <button onClick={()=>navTo('inventory')} className="text-xs text-indigo-600 hover:underline">Open Inventory →</button>}</div>
+        {a.toBuy.length===0 ? <div className="p-6 text-center text-slate-400 text-sm">Nothing below reorder that isn't already on order. 🎉</div> :
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">On hand</th><th className="text-right px-3 py-2">Reorder at</th><th className="text-right px-3 py-2">Buy ≥</th><th className="text-right px-3 py-2">Est. cost</th></tr></thead>
+        <tbody>{a.toBuy.slice(0,40).map((x,i)=>(
+          <tr key={i} className="border-t hover:bg-slate-50"><td className="px-3 py-2">{x.name}</td><td className="px-3 py-2 text-xs text-slate-500">{x.supplier||'—'}</td><td className="px-3 py-2 text-right text-rose-600 font-semibold">{x.qty.toFixed(2)} {x.unit||''}</td><td className="px-3 py-2 text-right text-slate-500">{x.reorder.toFixed(2)}</td><td className="px-3 py-2 text-right font-semibold">{x.need.toFixed(2)}</td><td className="px-3 py-2 text-right">{x.cost>0?peso(x.need*x.cost):'—'}</td></tr>
+        ))}</tbody></table></div>}
+      </div>
+
+      {/* Supplier scorecard */}
+      <div className="bg-white border rounded-xl overflow-hidden mt-4">
+        <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">🏭 Supplier scorecard (top by spend)</div>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Supplier</th><th className="text-right px-3 py-2">POs</th><th className="text-right px-3 py-2">Spend</th><th className="text-right px-3 py-2">On-time</th><th className="text-right px-3 py-2">Short deliv.</th><th className="text-right px-3 py-2">Returns</th><th className="text-right px-3 py-2">Open credit</th></tr></thead>
+        <tbody>{a.topSuppliers.slice(0,12).map((g,i)=>(
+          <tr key={i} className="border-t hover:bg-slate-50"><td className="px-3 py-2 font-medium">{g.name}</td><td className="px-3 py-2 text-right">{g.orders}</td><td className="px-3 py-2 text-right font-semibold">{peso(g.spend)}</td><td className={`px-3 py-2 text-right ${g.onTimeRate!=null&&g.onTimeRate<0.7?'text-rose-600 font-semibold':''}`}>{g.onTimeRate==null?'—':Math.round(g.onTimeRate*100)+'%'}</td><td className={`px-3 py-2 text-right ${g.short>0?'text-amber-600':''}`}>{g.short||0}</td><td className="px-3 py-2 text-right">{g.returns||0}</td><td className={`px-3 py-2 text-right ${g.openCredit>0?'text-emerald-700 font-semibold':'text-slate-400'}`}>{g.openCredit>0?peso(g.openCredit):'—'}</td></tr>
+        ))}</tbody></table></div>
+        <div className="px-4 py-2 text-[11px] text-slate-400">On-time = received on/before expected date · Open credit = refund-credits from returns not yet used.</div>
+      </div>
+
+      {/* Saved reports */}
+      <div className="bg-white border rounded-xl overflow-hidden mt-4">
+        <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">🗂 Saved reports</div>
+        {reports.length===0 ? <div className="p-6 text-center text-slate-400 text-sm">No saved reports yet.</div> :
+        <table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-4 py-2">Period</th><th className="text-left px-4 py-2">Generated</th><th className="text-center px-4 py-2">Flags</th><th className="text-left px-4 py-2">Summary</th><th></th></tr></thead>
+        <tbody>{reports.map(r=>(
+          <tr key={r.id} className="border-t hover:bg-slate-50">
+            <td className="px-4 py-2 font-medium">{r.period_label}</td>
+            <td className="px-4 py-2 text-xs text-slate-500">{fmtDate(String(r.generated_at).slice(0,10))}</td>
+            <td className="px-4 py-2 text-center font-semibold">{r.flag_count}</td>
+            <td className="px-4 py-2 text-xs text-slate-600 max-w-[24rem] truncate" title={r.summary}>{r.summary}</td>
+            <td className="px-4 py-2 text-right whitespace-nowrap"><button onClick={()=>setPrinting({ label:r.period_label, checks:(r.sections||{}).checks||[], flags:(r.sections||{}).flags||[], metrics:r.metrics||{}, topSuppliers:(r.sections||{}).topSuppliers||[], toBuy:(r.sections||{}).toBuy||[] })} className="text-xs text-slate-600 hover:underline mr-2">🖨 PDF</button>{canRun && <button onClick={()=>delReport(r)} className="text-xs text-rose-500 hover:underline">Delete</button>}</td>
+          </tr>
+        ))}</tbody></table>}
+      </div>
+
+      {printing && <PurchasingReportDoc report={printing} profile={profile} onClose={()=>setPrinting(null)} />}
+    </div>
+  );
+}
+
+function PurchasingReportDoc({ report, profile, onClose }){
+  const sev=(s)=>AUDIT_SEV[s]||AUDIT_SEV.info; const m=report.metrics||{};
+  return (
+    <Modal title={`Purchasing Report · ${report.label}`} onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .pur-sheet,.pur-sheet *{visibility:visible !important;} .pur-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end"><button onClick={()=>printAs(`Purchasing Report - ${report.label}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+        <div className="pur-sheet text-[12px] text-slate-800">
+          <div className="flex items-center justify-between border-b pb-2 mb-3"><div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Purchasing Audit — {report.label}</div></div><div className="text-right text-xs text-slate-500"><div>Generated {fmtDate(todayManila())}</div><div>{profile.name||profile.email}</div></div></div>
+          <div className="grid grid-cols-4 gap-2 mb-3 text-center">
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Spend MTD</div><div className="font-bold">{peso(m.spendMTD||0)}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Owed suppliers</div><div className="font-bold text-amber-600">{peso(m.recvUnpaid||0)}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Late deliveries</div><div className="font-bold text-rose-600">{m.overdueCt||0}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">To reorder</div><div className="font-bold">{m.toBuy||0}</div></div>
+          </div>
+          <div className="font-bold mb-1">Checklist</div>
+          <table className="w-full border-collapse mb-3"><tbody>{(report.checks||[]).map((c,i)=>(<tr key={i} className="border-b"><td className="py-1 pr-2 w-6">{c.status==='pass'?'✓':c.status==='fail'?'✕':'–'}</td><td className="py-1 font-medium">{c.label}</td><td className="py-1 text-slate-500 text-right">{c.detail}</td></tr>))}</tbody></table>
+          <div className="font-bold mb-1 mt-3">Flagged items ({(report.flags||[]).length})</div>
+          {(report.flags||[]).length===0 ? <div className="text-slate-500">None.</div> :
+          <table className="w-full border-collapse mb-3"><tbody>{(report.flags||[]).map((f,i)=>(<tr key={i} className="border-b"><td className="py-1 pr-2 align-top w-14"><span className="uppercase text-[9px] font-bold">{sev(f.severity).label}</span></td><td className="py-1 font-medium align-top w-52">{f.title}</td><td className="py-1 text-slate-600">{f.detail}</td></tr>))}</tbody></table>}
+          {(report.toBuy||[]).length>0 && <><div className="font-bold mb-1 mt-3">Reorder buy-list</div><table className="w-full border-collapse"><tbody>{(report.toBuy||[]).slice(0,30).map((x,i)=>(<tr key={i} className="border-b"><td className="py-1 font-medium">{x.name}</td><td className="py-1 text-slate-500">{x.supplier||''}</td><td className="py-1 text-right">on hand {Number(x.qty).toFixed(1)} / reorder {Number(x.reorder).toFixed(1)}</td><td className="py-1 text-right font-semibold">buy ≥ {Number(x.need).toFixed(1)}</td></tr>))}</tbody></table></>}
+          <div className="text-[10px] text-slate-400 border-t pt-2 mt-4">Generated by the AI Purchasing Auditor (rule-based). Verify each flag against the record before acting.</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }){
   const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns]);
   const years = finReportYears(postings);
@@ -57217,6 +57422,7 @@ function App(){
   const [auditOpenCaId,setAuditOpenCaId]=useState(null);     // deep-link a cash advance from an audit flag
   const [auditOpenBudgetId,setAuditOpenBudgetId]=useState(null); // deep-link a budget request from an audit flag
   const [auditOpenCheckId,setAuditOpenCheckId]=useState(null);   // deep-link a check from an audit flag
+  const [auditOpenPoId,setAuditOpenPoId]=useState(null);         // deep-link a PO from a purchasing-audit flag
   // Open the exact record behind an AI-Auditor flag, not just its list page.
   function openAuditFlag(f){
     if(!f) return;
@@ -57671,7 +57877,7 @@ function App(){
       allowed = new Set(['ops-command','agm-approvals','scorecard','sales-analyst','checkin','toolbox','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
-        'inventory','pur-home','requests','queue','orders','supplier-returns','stock-out','stock-movements','suppliers','pur-resources','materials-library',
+        'inventory','pur-home','purchasing-auditor','requests','queue','orders','supplier-returns','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','fin-reports','ai-auditor','budgets','estimates','petty-cash','cash-advances','other-collections','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-requests','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll','attendance','attendance-filings','pay-setup','payroll-run',
@@ -57747,15 +57953,15 @@ function App(){
     } else if(profile.role==='purchasing'){
       // Purchasing creates RFPs from POs + can submit budget requests + owns Stock Out.
       // Default landing is the Purchasing Home dashboard.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','purchasing-auditor','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_admin'){
       // Purchasing Admin — same access as the Purchasing team PLUS Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','subcon-cutting','prod','sampling','pur-cash-advance']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','purchasing-auditor','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','subcon','subcon-sewing','subcon-cutting','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='purchasing_personnel'){
       // Purchasing Personnel — same access as Purchasing Admin but WITHOUT Subcon Payroll.
-      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
+      allowed = new Set(['inbox','my-tasks','inventory','suppliers','requests','queue','orders','supplier-returns','stock-out','stock-movements','fabric-calc','pur-home','purchasing-auditor','pur-resources','materials-library','logistics','delivery-receipts','rfps','budgets','profile','prod','sampling','pur-cash-advance']);
       fallback = 'pur-home';
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
@@ -58432,7 +58638,7 @@ function App(){
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['purchasing-auditor','AI Auditor','🛠'],['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
       { group:'HR', items:[ ['hr-home','HR Dashboard','🧑‍💼'], ['employees','Employees','👤'], ['hr-salary','Salary Report','💰'], ['hr-orgchart','Org Chart','🏢'], ['hr-reviews','Performance Reviews','📊'], ['hr-relations','Employee Relations','⚖️'], ['hr-engagements','Employee Engagements','🎉'], ['hr-memos','Memo Board','📢'], ['hr-leave','Leave Tracker','🌴'], ['hr-requests','Approvals','✅'], ['hr-loans','Employee Loans','💵'], ['gov-loans','Government Loans','🏦'], ['hr-recruit','Recruitment','🎯'], ['hr-templates','Checklist Templates','📋'] ] },
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
@@ -58575,7 +58781,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['purchasing-auditor','AI Auditor','🛠'],['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -58586,7 +58792,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['purchasing-auditor','AI Auditor','🛠'],['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -58598,7 +58804,7 @@ function App(){
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['purchasing-auditor','AI Auditor','🛠'],['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'] ] },
       FINANCE_PURCHASING,
       LOGISTICS_GROUP,
@@ -58678,7 +58884,7 @@ function App(){
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
       { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
-      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
+      { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['purchasing-auditor','AI Auditor','🛠'],['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
       { group:'Logistics', items:[ ['logistics','Daily Schedule','🚚'], ['trip-tickets','Trip Tickets','🎫'], ['delivery-receipts','Delivery Receipts','📄'] ] },
       { group:'Payroll', items:[ ['attendance','Attendance / DTR','🕒'], ['attendance-filings','Attendance Filings','📝'], ['pay-setup','Payroll Setup','⚙️'], ['payroll-run','Payroll Dashboard','💵'], ['payroll','Sewing Payroll (old)','✂'] ] },
@@ -58923,7 +59129,7 @@ function App(){
         {view==='requests' && <PurchaseRequestsView profile={profile} requests={requests} items={items} suppliers={suppliers} departments={departments} profiles={profiles} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} onCreatePO={(pr)=>{ setCreatePOFromPR(pr); setView('orders'); }} onViewTechpack={openTechpackView} onOpenQueue={()=>setView('queue')} openPRId={inboxPRId} onConsumedPR={()=>setInboxPRId(null)} />}
         {view==='pr-request' && <PurchaseIntakeView profile={profile} profiles={profiles} openPRId={inboxPRId} />}
         {view==='queue' && <MaterialsQueueView profile={profile} requests={requests} items={items} suppliers={suppliers} leads={leads} clients={clients} orders={orders} reload={loadAll} onOpenPO={()=>setView('orders')} />}
-        {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} onReturn={(po)=>{ setReturnFromPO(po); setView('supplier-returns'); }} />}
+        {view==='orders' && <PurchaseOrdersView profile={profile} profiles={profiles} orders={orders} items={items} suppliers={suppliers} requests={requests} leads={leads} clients={clients} reload={loadAll} openFromPR={createPOFromPR} onClearPR={()=>setCreatePOFromPR(null)} onReturn={(po)=>{ setReturnFromPO(po); setView('supplier-returns'); }} openId={auditOpenPoId} onOpenConsumed={()=>setAuditOpenPoId(null)} />}
         {view==='styles' && <StylesView styles={styles} items={items} suppliers={suppliers} departments={departments} profile={profile} requests={requests} reload={loadAll} />}
         {view==='stock-out' && <StockOutView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} items={items} requests={requests} stockMovements={stockMovements} reload={loadAll} />}
         {view==='stock-movements' && <StockMovementsView profile={profile} profiles={profiles} items={items} prodJobs={prodJobs} orders={orders} stockMovements={stockMovements} requests={requests} leads={leads} clients={clients} sampleJobs={sampleJobs} reload={loadAll} />}
@@ -58987,6 +59193,7 @@ function App(){
         {view==='other-collections' && <OtherCollectionsView profile={profile} profiles={profiles} otherCollections={otherCollections} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
         {view==='ai-auditor' && <AccountingAuditorView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} vouchers={vouchers} rfps={rfps} cashAdvances={cashAdvances} budgetRequests={budgetRequests} bankTransactions={bankTransactions} bankAccounts={bankAccounts} reload={loadAll} navTo={navTo} onOpenFlag={openAuditFlag} />}
         {view==='sales-analyst' && <SalesAnalystView profile={profile} profiles={profiles} leads={leads} clients={clients} salesOrders={salesOrders} soPayments={soPayments} reload={loadAll} onOpenLead={(l)=>setDetailLead(l)} />}
+        {view==='purchasing-auditor' && <PurchasingAuditorView profile={profile} profiles={profiles} orders={orders} requests={requests} suppliers={suppliers} items={items} stockMovements={stockMovements} supplierReturns={supplierReturns} reload={loadAll} navTo={navTo} onOpenPo={(po)=>{ setAuditOpenPoId(po.id); setView('orders'); }} />}
         {view==='supplier-returns' && <SupplierReturnsView profile={profile} profiles={profiles} suppliers={suppliers} items={items} orders={orders} bankAccounts={bankAccounts} chartAccounts={chartAccounts} supplierReturns={supplierReturns} reload={loadAll} openPO={returnFromPO} onClearPO={()=>setReturnFromPO(null)} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} rfps={rfps} otherCollections={otherCollections} supplierReturns={supplierReturns} reload={loadAll} />}
