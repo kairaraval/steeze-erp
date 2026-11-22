@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 1000 · New: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 1001 · New: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50039,6 +50039,240 @@ function SupplierReturnsView({ profile, profiles, suppliers, items, orders, bank
   );
 }
 
+/* ═══════════════════ AI ACCOUNTING AUDITOR (Phase 1 — rule checks) ═══════════
+   A virtual "employee" that audits the books for a month: confirms every
+   payroll and expense is recorded, checks AR / Sales Orders, and flags anything
+   off. All checks are deterministic (no AI yet) and READ-ONLY — it only writes
+   its own reports + notifications, never touches a financial record. Every flag
+   links back to the real record so a human verifies before acting.           */
+const AUDIT_SEV = { red:{label:'Issue', cls:'bg-rose-100 text-rose-700', dot:'bg-rose-500'}, amber:{label:'Review', cls:'bg-amber-100 text-amber-700', dot:'bg-amber-500'}, info:{label:'Note', cls:'bg-sky-100 text-sky-700', dot:'bg-sky-500'} };
+function monthBounds(ym){ // ym = 'YYYY-MM'
+  const [y,m]=ym.split('-').map(Number); const start=new Date(Date.UTC(y,m-1,1)); const end=new Date(Date.UTC(y,m,0));
+  const f=(d)=>`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+  return { start:f(start), end:f(end), label:start.toLocaleString('en-US',{month:'long',year:'numeric',timeZone:'UTC'}) };
+}
+function fridaysIn(ym){ const [y,m]=ym.split('-').map(Number); const out=[]; const d=new Date(Date.UTC(y,m-1,1)); while(d.getUTCMonth()===m-1){ if(d.getUTCDay()===5) out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`); d.setUTCDate(d.getUTCDate()+1); } return out; }
+
+function AccountingAuditorView({ profile, profiles, salesOrders, soPayments, vouchers, rfps, cashAdvances, budgetRequests, bankTransactions, bankAccounts, reload, navTo }){
+  const canRun = ['admin','accounting','accounting_officer','agm'].includes(profile.role);
+  const today = todayManila();
+  const [ym,setYm]=useState(today.slice(0,7));
+  const [pr,setPr]=useState({ runs:[], payouts:[], subcon:[] });
+  const [reports,setReports]=useState([]);
+  const [printing,setPrinting]=useState(null);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  useEffect(()=>{ (async()=>{
+    try{ const [a,b,c,d]=await Promise.all([
+      sb.from('payroll_runs').select('id,cycle,cutoff_key,period_start,period_end,pay_date,status,totals,agm_approved_at').is('deleted_at',null),
+      sb.from('payroll_payouts').select('id,kind,period_start,period_end,total_amount,created_at').is('deleted_at',null),
+      sb.from('subcon_payroll_batches').select('id,number,period_from,period_to,total_amount,status,created_at').is('deleted_at',null),
+      sb.from('audit_reports').select('*').is('deleted_at',null).order('period_start',{ascending:false}),
+    ]); setPr({ runs:a.data||[], payouts:b.data||[], subcon:c.data||[] }); setReports(d.data||[]); }catch(_){}
+  })(); },[]);
+  const nameOf=(id)=>{ const p=(profiles||[]).find(x=>x.id===id); return p?(p.name||p.email):'—'; };
+
+  // ─── The audit engine ──────────────────────────────────────────────────────
+  const audit = useMemo(()=>{
+    const { start, end, label } = monthBounds(ym);
+    const inMonth=(d)=>{ const s=String(d||'').slice(0,10); return s>=start && s<=end; };
+    const checks=[]; const flags=[];
+    const addCheck=(key,lbl,ok,detail)=>checks.push({ key, label:lbl, status: ok==null?'na':(ok?'pass':'fail'), detail });
+    const flag=(sev,title,detail,link_view,ref_type,ref_id)=>flags.push({ severity:sev, title, detail, link_view, ref_type, ref_id });
+
+    // 1) Semi-monthly payroll — expect H1 + H2 cutoffs for the month
+    const runs=(pr.runs||[]).filter(r=>r.cycle==='semi_monthly');
+    const h1=runs.find(r=>String(r.cutoff_key||'')===`${ym}-H1`);
+    const h2=runs.find(r=>String(r.cutoff_key||'')===`${ym}-H2`);
+    addCheck('semi','Semi-monthly payroll (15th & 30th)', !!(h1&&h2), `${h1?'H1 ✓':'H1 missing'} · ${h2?'H2 ✓':'H2 missing'}`);
+    if(!h1) flag('amber','1st-half payroll not recorded',`No semi-monthly payroll run for ${label} (cutoff ${ym}-H1).`,'payroll-run');
+    if(!h2 && today>=`${ym}-16`) flag('amber','2nd-half payroll not recorded',`No semi-monthly payroll run for ${label} (cutoff ${ym}-H2).`,'payroll-run');
+    [h1,h2].filter(Boolean).forEach(r=>{ if(r.status!=='paid' && r.status!=='approved' && !r.agm_approved_at) flag('amber','Payroll run not yet approved',`${r.cutoff_key} is still "${r.status}" — not approved/paid.`,'payroll-run'); });
+
+    // 2) Weekly payroll (every Friday) — informational review per Friday
+    const fris=fridaysIn(ym);
+    const weeklyPayouts=(pr.payouts||[]).filter(p=>p.kind==='sewing' && (inMonth(p.period_end)||inMonth(p.period_start)||inMonth(p.created_at)));
+    const covered=(fri)=>weeklyPayouts.some(p=>{ const ps=String(p.period_start||'').slice(0,10), pe=String(p.period_end||p.period_start||'').slice(0,10); const inPeriod = ps && pe && fri>=ps && fri<=pe; const nearCreate = p.created_at && Math.abs((new Date(fri)-new Date(String(p.created_at).slice(0,10)))/864e5)<=4; return inPeriod || nearCreate; });
+    const missFri=fris.filter(f=>f<=today).filter(f=>!covered(f));
+    addCheck('weekly','Weekly payroll every Friday', missFri.length===0 ? true : null, `${fris.filter(f=>f<=today).length-missFri.length}/${fris.filter(f=>f<=today).length} Fridays have a weekly payout`);
+    missFri.forEach(f=> flag('amber','Weekly payroll to verify',`No weekly (sewing) payout found for the week of Friday ${fmtDate(f)}. Confirm it was run or recorded elsewhere.`,'payroll'));
+
+    // 3) Subcon payroll — audit when there's activity (not a fixed calendar)
+    const subMonth=(pr.subcon||[]).filter(b=>inMonth(b.period_to)||inMonth(b.period_from)||inMonth(b.created_at));
+    const subUnpaid=subMonth.filter(b=>!['paid'].includes(b.status));
+    addCheck('subcon','Subcon payroll recorded (when active)', subMonth.length===0?null:true, subMonth.length?`${subMonth.length} batch(es) · ${subUnpaid.length} not yet paid`:'No subcon payroll this month');
+    subUnpaid.filter(b=>b.status!=='requested' && b.status!=='signed').forEach(b=> flag('info','Subcon payroll not yet paid',`${b.number||'batch'} (${peso(b.total_amount||0)}) status "${b.status}".`,'subcon-sewing'));
+
+    // 4) Expenses recorded — RFP paid trail + cash advance liquidation
+    const rfpsPaid=(rfps||[]).filter(r=>!r.deleted_at && r.paid_at && inMonth(r.paid_at));
+    const rfpNoVoucher=rfpsPaid.filter(r=>!r.voucher_id);
+    addCheck('rfp','Paid RFPs have a voucher', rfpNoVoucher.length===0, `${rfpsPaid.length} paid · ${rfpNoVoucher.length} missing a voucher`);
+    rfpNoVoucher.forEach(r=> flag('red','Paid RFP without a voucher',`${r.number||'RFP'} (${peso(r.amount)}) marked paid but has no voucher recorded.`,'rfps','rfp',r.id));
+    const caOpen=(cashAdvances||[]).filter(c=>!c.deleted_at && c.status==='released' && c.date && c.date<=`${end}` ).filter(c=>{ const age=(new Date(today)-new Date(String(c.date).slice(0,10)))/864e5; return age>14; });
+    addCheck('ca','Cash advances liquidated on time', caOpen.length===0, caOpen.length?`${caOpen.length} released >14 days ago, still open`:'No overdue liquidations');
+    caOpen.forEach(c=> flag('amber','Cash advance not liquidated',`${c.number||'CA'} (${peso(c.amount)}) released ${fmtDate(c.date)} — still not liquidated.`,'pur-cash-advance','cash_advance',c.id));
+
+    // 5) AR integrity + receivables aging
+    const liveSOs=(salesOrders||[]).filter(s=>!s.deleted_at && !s.voided_at && s.status!=='cancelled');
+    let ar0=0,ar30=0,ar60=0,ar90=0, arTotal=0;
+    const overpaid=[];
+    liveSOs.forEach(s=>{ const bal=Math.round((Number(s.total||0)-Number(s.amount_paid||0))*100)/100; if(bal<-1){ overpaid.push(s); } if(bal>1){ arTotal+=bal; const age=(new Date(today)-new Date(String(s.date||s.created_at||today).slice(0,10)))/864e5; if(age<=30)ar0+=bal; else if(age<=60)ar30+=bal; else if(age<=90)ar60+=bal; else ar90+=bal; } });
+    addCheck('ar','No overpaid / negative-balance SOs', overpaid.length===0, overpaid.length?`${overpaid.length} SO(s) paid more than their total`:'All SO balances look sane');
+    overpaid.forEach(s=> flag('red','Sales order overpaid',`${s.number||'SO'} · ${s.client_name||''}: paid ${peso(s.amount_paid)} vs total ${peso(s.total)}.`,'sales-orders','sales_order',s.id));
+
+    // 6) SO reconciliation — amount_paid vs sum of verified payments
+    const paysBySO={}; (soPayments||[]).filter(p=>!p.deleted_at && ['verified','paid','confirmed'].includes(p.status)).forEach(p=>{ paysBySO[p.sales_order_id]=(paysBySO[p.sales_order_id]||0)+Number(p.amount||0); });
+    const mism=liveSOs.filter(s=>{ const recorded=Number(s.amount_paid||0); const verified=paysBySO[s.id]||0; return Math.abs(recorded-verified)>1; });
+    addCheck('recon','SO paid totals match verified payments', mism.length===0, mism.length?`${mism.length} SO(s) where amount_paid ≠ sum of verified payments`:'All reconciled');
+    mism.slice(0,30).forEach(s=> flag('amber','SO payment total mismatch',`${s.number||'SO'}: recorded ${peso(s.amount_paid||0)} vs verified payments ${peso(paysBySO[s.id]||0)}.`,'sales-orders','sales_order',s.id));
+
+    // 7) Anomaly — duplicate payments (same SO, amount, date)
+    const seen={}; const dups=[];
+    (soPayments||[]).filter(p=>!p.deleted_at && inMonth(p.date||p.paid_at||p.created_at)).forEach(p=>{ const k=`${p.sales_order_id}|${Number(p.amount||0)}|${String(p.date||p.paid_at||'').slice(0,10)}`; if(seen[k]) dups.push(p); else seen[k]=true; });
+    addCheck('dup','No duplicate-looking payments', dups.length===0, dups.length?`${dups.length} possible duplicate payment(s)`:'None detected');
+    dups.forEach(p=>{ const s=liveSOs.find(x=>x.id===p.sales_order_id); flag('amber','Possible duplicate payment',`Two payments of ${peso(p.amount)} on ${fmtDate(String(p.date||p.paid_at||'').slice(0,10))} for ${s?.number||'an SO'}.`,'sales-orders','sales_order',p.sales_order_id); });
+
+    const metrics={ ar_total:arTotal, ar_0_30:ar0, ar_31_60:ar30, ar_61_90:ar60, ar_90p:ar90,
+      rfp_paid:rfpsPaid.length, so_count:liveSOs.length, so_outstanding:arTotal };
+    const pass=checks.filter(c=>c.status==='pass').length, fail=checks.filter(c=>c.status==='fail').length;
+    return { label, start, end, checks, flags, metrics, pass, fail };
+  }, [ym, pr, salesOrders, soPayments, rfps, cashAdvances]);
+
+  async function saveReport(auto=false){
+    if(!canRun) return;
+    setBusy(true); setMsg('');
+    try{
+      const redCount=audit.flags.filter(f=>f.severity==='red').length;
+      const summary = audit.fail===0 && redCount===0
+        ? `${audit.label}: books look clean — ${audit.pass} checks passed${audit.flags.length?`, ${audit.flags.length} item(s) to review`:''}.`
+        : `${audit.label}: ${audit.fail} check(s) failed and ${redCount} issue(s) need attention. ${audit.pass} checks passed.`;
+      const { data:ins, error }=await sb.from('audit_reports').insert({
+        period_label:audit.label, period_start:audit.start, period_end:audit.end, scope:'finance',
+        generated_by:profile.id, auto, pass_count:audit.pass, fail_count:audit.fail, flag_count:audit.flags.length,
+        summary, checks:audit.checks, flags:audit.flags, metrics:audit.metrics,
+      }).select('*').single();
+      if(error) throw error;
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['accounting','accounting_officer','admin']); const rows=(ppl||[]).filter(a=>a.id!==profile.id).map(a=>({ recipient_id:a.id, actor_id:profile.id, type:'system', text:`🔍 Accounting audit ready — ${audit.label}: ${summary}`, link_view:'ai-auditor', ref_type:'audit_report', ref_id:ins.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      setReports(rs=>[ins,...rs]); setBusy(false); setMsg('Saved and sent to Accounting.');
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  async function delReport(r){ if(!confirm('Delete this saved audit report?')) return; await sb.from('audit_reports').update({ deleted_at:new Date().toISOString() }).eq('id',r.id); setReports(rs=>rs.filter(x=>x.id!==r.id)); }
+
+  const sevCount=(s)=>audit.flags.filter(f=>f.severity===s).length;
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">🔍 AI Accounting Auditor</h1>
+            <p className="text-slate-500 text-sm">Monthly review of payroll, expenses, AR &amp; sales orders. Read-only — it flags, you decide.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input type="month" value={ym} max={today.slice(0,7)} onChange={e=>setYm(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-slate-300" />
+            {canRun && <button onClick={()=>saveReport(false)} disabled={busy} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'📌 Run & save report'}</button>}
+            <button onClick={()=>setPrinting(audit)} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 PDF</button>
+          </div>
+        </div>
+        {msg && <div className="text-xs text-emerald-700 mt-2">{msg}</div>}
+      </div>
+
+      {/* Headline band */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Checks passed</div><div className="text-2xl font-bold text-emerald-700">{audit.pass}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Issues</div><div className="text-2xl font-bold text-rose-600">{sevCount('red')}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">To review</div><div className="text-2xl font-bold text-amber-600">{sevCount('amber')}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Outstanding AR</div><div className="text-2xl font-bold text-slate-800">{peso(audit.metrics.ar_total||0)}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">90+ days overdue</div><div className="text-2xl font-bold text-rose-600">{peso(audit.metrics.ar_90p||0)}</div></div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Checklist */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">✓ Audit checklist — {audit.label}</div>
+          <div className="divide-y">{audit.checks.map(c=>(
+            <div key={c.key} className="px-4 py-2.5 flex items-start gap-3">
+              <span className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0 ${c.status==='pass'?'bg-emerald-500':c.status==='fail'?'bg-rose-500':'bg-slate-300'}`}>{c.status==='pass'?'✓':c.status==='fail'?'✕':'–'}</span>
+              <div className="min-w-0"><div className="text-sm font-medium text-slate-800">{c.label}</div><div className="text-xs text-slate-500">{c.detail}</div></div>
+            </div>
+          ))}</div>
+        </div>
+
+        {/* Flags */}
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">⚠ Flagged items ({audit.flags.length})</div>
+          {audit.flags.length===0 ? <div className="p-8 text-center text-slate-400 text-sm">Nothing flagged for {audit.label}. 🎉</div> :
+          <div className="divide-y max-h-[28rem] overflow-y-auto">{audit.flags.map((f,i)=>{ const sev=AUDIT_SEV[f.severity]||AUDIT_SEV.info; return (
+            <div key={i} className="px-4 py-2.5 flex items-start gap-3 hover:bg-slate-50">
+              <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${sev.dot}`}></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-slate-800">{f.title} <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded ${sev.cls}`}>{sev.label}</span></div>
+                <div className="text-xs text-slate-500">{f.detail}</div>
+              </div>
+              {f.link_view && navTo && <button onClick={()=>navTo(f.link_view)} className="text-xs text-indigo-600 hover:underline shrink-0">Open →</button>}
+            </div>
+          ); })}</div>}
+        </div>
+      </div>
+
+      {/* AR aging */}
+      <div className="bg-white border rounded-xl overflow-hidden mt-4">
+        <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">📇 Receivables aging — outstanding {peso(audit.metrics.ar_total||0)}</div>
+        <div className="grid grid-cols-4 divide-x text-center">
+          {[['0–30 days','ar_0_30','text-slate-800'],['31–60','ar_31_60','text-amber-600'],['61–90','ar_61_90','text-orange-600'],['90+','ar_90p','text-rose-600']].map(([lbl,k,cls])=>(
+            <div key={k} className="p-4"><div className="text-[10px] uppercase text-slate-400">{lbl}</div><div className={`text-xl font-bold ${cls}`}>{peso(audit.metrics[k]||0)}</div></div>
+          ))}
+        </div>
+      </div>
+
+      {/* Saved reports */}
+      <div className="bg-white border rounded-xl overflow-hidden mt-4">
+        <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">🗂 Saved monthly reports</div>
+        {reports.length===0 ? <div className="p-6 text-center text-slate-400 text-sm">No saved reports yet. Run &amp; save one above.</div> :
+        <table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-4 py-2">Period</th><th className="text-left px-4 py-2">Generated</th><th className="text-center px-4 py-2">Pass</th><th className="text-center px-4 py-2">Issues</th><th className="text-left px-4 py-2">Summary</th><th></th></tr></thead>
+        <tbody>{reports.map(r=>(
+          <tr key={r.id} className="border-t hover:bg-slate-50">
+            <td className="px-4 py-2 font-medium">{r.period_label}{r.auto && <span className="ml-1 text-[9px] uppercase text-slate-400">auto</span>}</td>
+            <td className="px-4 py-2 text-xs text-slate-500">{fmtDate(String(r.generated_at).slice(0,10))} · {nameOf(r.generated_by)}</td>
+            <td className="px-4 py-2 text-center text-emerald-700 font-semibold">{r.pass_count}</td>
+            <td className="px-4 py-2 text-center text-rose-600 font-semibold">{r.flag_count}</td>
+            <td className="px-4 py-2 text-xs text-slate-600 max-w-[22rem] truncate" title={r.summary}>{r.summary}</td>
+            <td className="px-4 py-2 text-right whitespace-nowrap"><button onClick={()=>setPrinting({ label:r.period_label, start:r.period_start, end:r.period_end, checks:r.checks||[], flags:r.flags||[], metrics:r.metrics||{}, pass:r.pass_count, fail:r.fail_count })} className="text-xs text-slate-600 hover:underline mr-2">🖨 PDF</button>{canRun && <button onClick={()=>delReport(r)} className="text-xs text-rose-500 hover:underline">Delete</button>}</td>
+          </tr>
+        ))}</tbody></table>}
+      </div>
+
+      {printing && <AuditReportDoc report={printing} profile={profile} onClose={()=>setPrinting(null)} />}
+    </div>
+  );
+}
+
+function AuditReportDoc({ report, profile, onClose }){
+  const sev=(s)=>AUDIT_SEV[s]||AUDIT_SEV.info;
+  return (
+    <Modal title={`Audit Report · ${report.label}`} onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .aud-sheet,.aud-sheet *{visibility:visible !important;} .aud-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end"><button onClick={()=>printAs(`Accounting Audit - ${report.label}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+        <div className="aud-sheet text-[12px] text-slate-800">
+          <div className="flex items-center justify-between border-b pb-2 mb-3"><div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Accounting Audit — {report.label}</div></div><div className="text-right text-xs text-slate-500"><div>Generated {fmtDate(todayManila())}</div><div>{profile.name||profile.email}</div></div></div>
+          <div className="mb-3"><span className="font-bold">Summary:</span> {report.fail===0 && report.flags.filter(f=>f.severity==='red').length===0 ? 'Books look clean for the period.' : `${report.fail} check(s) failed · ${report.flags.filter(f=>f.severity==='red').length} issue(s) need attention.`} {report.pass} checks passed.</div>
+          <div className="grid grid-cols-4 gap-2 mb-3 text-center">
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Outstanding AR</div><div className="font-bold">{peso(report.metrics.ar_total||0)}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">90+ overdue</div><div className="font-bold text-rose-600">{peso(report.metrics.ar_90p||0)}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Checks passed</div><div className="font-bold text-emerald-700">{report.pass}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Flagged</div><div className="font-bold text-amber-600">{report.flags.length}</div></div>
+          </div>
+          <div className="font-bold mb-1 mt-3">Checklist</div>
+          <table className="w-full border-collapse mb-3"><tbody>{(report.checks||[]).map((c,i)=>(<tr key={i} className="border-b"><td className="py-1 pr-2 w-6">{c.status==='pass'?'✓':c.status==='fail'?'✕':'–'}</td><td className="py-1 font-medium">{c.label}</td><td className="py-1 text-slate-500 text-right">{c.detail}</td></tr>))}</tbody></table>
+          <div className="font-bold mb-1 mt-3">Flagged items ({report.flags.length})</div>
+          {report.flags.length===0 ? <div className="text-slate-500">None.</div> :
+          <table className="w-full border-collapse"><tbody>{report.flags.map((f,i)=>(<tr key={i} className="border-b"><td className="py-1 pr-2 align-top w-16"><span className="uppercase text-[9px] font-bold">{sev(f.severity).label}</span></td><td className="py-1 font-medium align-top w-56">{f.title}</td><td className="py-1 text-slate-600">{f.detail}</td></tr>))}</tbody></table>}
+          <div className="text-[10px] text-slate-400 border-t pt-2 mt-4">Generated by the AI Accounting Auditor (rule-based). All flags are indicative — verify each against the source record before acting. Read-only: this review posts no accounting entries.</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }){
   const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns]);
   const years = finReportYears(postings);
@@ -57004,7 +57238,7 @@ function App(){
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
         'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
         'inventory','pur-home','requests','queue','orders','supplier-returns','stock-out','stock-movements','suppliers','pur-resources','materials-library',
-        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','fin-reports','budgets','estimates','petty-cash','cash-advances','other-collections','rfps','expense-log',
+        'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','fin-reports','ai-auditor','budgets','estimates','petty-cash','cash-advances','other-collections','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-requests','hr-loans','gov-loans','hr-recruit','hr-templates',
         'logistics','trip-tickets','delivery-receipts','payroll','attendance','attendance-filings','pay-setup','payroll-run',
         'assets','hr-payments','admin-rfp','admin-home','admin-directory','admin-office','admin-pr','admin-requests','admin-permits','admin-maintenance','pur-cash-advance']);
@@ -57092,7 +57326,7 @@ function App(){
     } else if(profile.role==='accounting' || profile.role==='accounting_officer'){
       // Finance/Accounting owns the entire Finance module + has Stock Out visibility for audit.
       // Accounting Officer has identical view access; edit/delete/approval is gated per-view.
-      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','supplier-returns','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','other-collections','cash-position','cash-flow','pnl','bir','fin-home','general-ledger','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
+      allowed = new Set(['inbox','my-tasks','pipeline','techpacks','clients','team','transmittals','inventory','suppliers','requests','queue','orders','supplier-returns','styles','stock-out','stock-movements','pur-home','buy-list','payroll','hr-loans','gov-loans','logistics','delivery-receipts','estimates','sales-orders','invoices','ledger','commissions','banks','checks','rfps','ap-vouchers','vouchers','expenses','expense-log','budgets','petty-cash','cash-advances','other-collections','cash-position','cash-flow','pnl','bir','fin-home','general-ledger','ai-auditor','advances-employees','fin-reports','prod','pattern','cutting','sampling','embroidery','knitting','sewing','packing','profile','subcon','subcon-sewing','subcon-cutting','assets','journal','chart-accounts','pur-cash-advance','owner-advance','pay-setup','attendance','payroll-run']);
       fallback = 'fin-home';
     } else if(profile.role==='sewing_lead'){
       // Sewing Line Lead gets view access to Production + Sampling boards
@@ -57712,6 +57946,7 @@ function App(){
     ['assets','Asset Register','🏷'],
     ['journal','Journal Entries','📓'],
     ['general-ledger','General Ledger','📒'],
+    ['ai-auditor','AI Auditor','🔍'],
     ['advances-employees','Advances to Employees','🤝'],
     ['fin-reports','Financial Reports','📈'],
     ['bir','BIR Tax Helpers','🧾'],
@@ -58316,6 +58551,7 @@ function App(){
         {view==='journal' && <JournalView profile={profile} profiles={profiles} journalEntries={journalEntries} chartAccounts={chartAccounts} bankAccounts={bankAccounts} costCenters={costCenters} reload={loadAll} />}
         {view==='general-ledger' && <GeneralLedgerView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} cashAdvances={cashAdvances} salesOrders={salesOrders} rfps={rfps} otherCollections={otherCollections} supplierReturns={supplierReturns} />}
         {view==='other-collections' && <OtherCollectionsView profile={profile} profiles={profiles} otherCollections={otherCollections} chartAccounts={chartAccounts} bankAccounts={bankAccounts} reload={loadAll} />}
+        {view==='ai-auditor' && <AccountingAuditorView profile={profile} profiles={profiles} salesOrders={salesOrders} soPayments={soPayments} vouchers={vouchers} rfps={rfps} cashAdvances={cashAdvances} budgetRequests={budgetRequests} bankTransactions={bankTransactions} bankAccounts={bankAccounts} reload={loadAll} navTo={navTo} />}
         {view==='supplier-returns' && <SupplierReturnsView profile={profile} profiles={profiles} suppliers={suppliers} items={items} orders={orders} bankAccounts={bankAccounts} chartAccounts={chartAccounts} supplierReturns={supplierReturns} reload={loadAll} openPO={returnFromPO} onClearPO={()=>setReturnFromPO(null)} />}
         {view==='advances-employees' && <AdvancesToEmployeesView profile={profile} profiles={profiles} employees={employees} hrLoans={hrLoans} hrLoanInstallments={hrLoanInstallments} reload={loadAll} />}
         {view==='fin-reports' && <FinanceReportsView profile={profile} journalEntries={journalEntries} vouchers={vouchers} expenses={expenses} bankTransactions={bankTransactions} soPayments={soPayments} bankAccounts={bankAccounts} chartAccounts={chartAccounts} costCenters={costCenters} salesOrders={salesOrders} orders={orders} cashAdvances={cashAdvances} leads={leads} profiles={profiles} apVouchers={apVouchers} rfps={rfps} otherCollections={otherCollections} supplierReturns={supplierReturns} reload={loadAll} />}
