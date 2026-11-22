@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 1006 · New: AI Sales Analyst (Executive → AI Sales Analyst, for Admin & AGM). A live read on the number: progress and forecast to ₱100M (booked YTD, gap, projected year-end at recent pace, weekly run-rate needed), open pipeline by stage with win rate and average deal size, deal alerts (big deals at risk, stalled with no movement, past expected close, closing this week — each opening the lead), and client insight (top clients, repeat vs new, and a win-back list of clients gone quiet 90+ days). Run & save a weekly brief that notifies leadership. Deterministic analytics for now; the AI write-up comes next. · Build 1005: AI Auditor flagged check deep-links to that specific check’s details. · Build 1004: AI Auditor payroll check reworked for how payroll actually works today: payroll is run in Sprout and Accounting records each weekly & monthly payroll here as a Journal Entry or RFP. The auditor now confirms a payroll JV/RFP exists for every Friday (weekly) and around the 15th and month-end (monthly), instead of looking at the unused OS payroll module — so it correctly recognises the WEEK 1/2 and monthly payroll JVs. · Build 1003: AI Auditor 'Open →' on a flagged item now jumps straight to that exact record — the specific RFP, sales order, cash advance (DV / owner / petty cash) or budget request opens in its own screen, instead of dumping you on the whole list page. · Build 1002: AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 1007 · AI Sales Analyst now audits the sales book too: flags samples delivered free to clients that aren't ₱1M/yr clients (your free-sample rule) with no approved sample charge on record; runs discipline checks (open deals with no value or no close date, won deals with no sales order, unassigned leads, estimates sent >30 days and undecided); and adds a Sales Manager Scorecard — per manager: open deals, pipeline, win rate, stalled deals, past-close deals, delivered-unpaid, and free samples — so you can audit each manager's follow-through. · Build 1006: New: AI Sales Analyst (Executive → AI Sales Analyst, for Admin & AGM). A live read on the number: progress and forecast to ₱100M (booked YTD, gap, projected year-end at recent pace, weekly run-rate needed), open pipeline by stage with win rate and average deal size, deal alerts (big deals at risk, stalled with no movement, past expected close, closing this week — each opening the lead), and client insight (top clients, repeat vs new, and a win-back list of clients gone quiet 90+ days). Run & save a weekly brief that notifies leadership. Deterministic analytics for now; the AI write-up comes next. · Build 1005: AI Auditor flagged check deep-links to that specific check’s details. · Build 1004: AI Auditor payroll check reworked for how payroll actually works today: payroll is run in Sprout and Accounting records each weekly & monthly payroll here as a Journal Entry or RFP. The auditor now confirms a payroll JV/RFP exists for every Friday (weekly) and around the 15th and month-end (monthly), instead of looking at the unused OS payroll module — so it correctly recognises the WEEK 1/2 and monthly payroll JVs. · Build 1003: AI Auditor 'Open →' on a flagged item now jumps straight to that exact record — the specific RFP, sales order, cash advance (DV / owner / petty cash) or budget request opens in its own screen, instead of dumping you on the whole list page. · Build 1002: AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -50361,15 +50361,18 @@ function SalesAnalystView({ profile, profiles, leads, clients, salesOrders, soPa
   const today = todayManila();
   const [manualYear,setManualYear]=useState({});
   const [reports,setReports]=useState([]);
+  const [sx,setSx]=useState({ samples:[], estimates:[] });
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
   const [printing,setPrinting]=useState(null);
   useEffect(()=>{ (async()=>{
     try{ const yr=new Date().getFullYear();
-      const [a,b]=await Promise.all([
+      const [a,b,sm,es]=await Promise.all([
         sb.from('annual_sales_manual').select('ym,amount').like('ym',`${yr}-%`),
         sb.from('sales_reports').select('*').is('deleted_at',null).order('period_start',{ascending:false}),
+        sb.from('sampling_jobs').select('id,number,lead_id,client_id,client_name,item,status,created_at').is('deleted_at',null),
+        sb.from('estimates').select('id,lead_id,client_id,purpose,status,total,sales_order_id,created_at'),
       ]);
-      const m={}; (a.data||[]).forEach(r=>{ m[r.ym]=Number(r.amount)||0; }); setManualYear(m); setReports(b.data||[]);
+      const m={}; (a.data||[]).forEach(r=>{ m[r.ym]=Number(r.amount)||0; }); setManualYear(m); setReports(b.data||[]); setSx({ samples:sm.data||[], estimates:es.data||[] });
     }catch(_){}
   })(); },[]);
   const clientNm=(id)=>(clients||[]).find(c=>c.id===id)?.company||'—';
@@ -50426,18 +50429,53 @@ function SalesAnalystView({ profile, profiles, leads, clients, salesOrders, soPa
     const quiet=Object.values(everWon).filter(c=>c.lastWon && daysBetween(today,c.lastWon)>90).sort((x,y)=>y.value-x.value).slice(0,8);
     const concentration= totalWonVal>0 && topClients[0] ? topClients[0].value/totalWonVal : 0;
 
-    const metrics={ salesYtd, pct, gap, projected, projectedLinear, weeklyNeeded, openVal, openCount:open.length, winRate, avgDeal, perWeekRecent, totalWonVal, repeat, newc, concentration };
-    return { metrics, byStage, alerts, topClients, quiet,
+    // ── SALES DISCIPLINE AUDIT ──────────────────────────────────────────────
+    const BIG=1000000;  // free samples allowed only for ≥₱1M/yr clients
+    const bigClients=new Set(Object.values(everWon).filter(c=>c.value>=BIG).map(c=>c.id).filter(Boolean));
+    const chargedLead=new Set((sx.estimates||[]).filter(e=>e.purpose==='sample' && (e.status==='approved'||e.sales_order_id)).map(e=>e.lead_id).filter(Boolean));
+    const chargedClient=new Set((sx.estimates||[]).filter(e=>e.purpose==='sample' && (e.status==='approved'||e.sales_order_id)).map(e=>e.client_id).filter(Boolean));
+    const deliveredSamples=(sx.samples||[]).filter(s=>s.status==='delivered');
+    const freeSamples=deliveredSamples.filter(s=>{ const big=s.client_id&&bigClients.has(s.client_id); const charged=(s.lead_id&&chargedLead.has(s.lead_id))||(s.client_id&&chargedClient.has(s.client_id)); return !big&&!charged; });
+    const sAudit={ checks:[], flags:[] };
+    const sCheck=(key,lbl,ok,detail)=>sAudit.checks.push({ key, label:lbl, status: ok==null?'na':(ok?'pass':'fail'), detail });
+    const sFlag=(sev,title,detail,lead)=>sAudit.flags.push({ severity:sev, title, detail, lead_id:lead?.id, lead });
+    sCheck('samples','Samples paid unless a ₱1M client', freeSamples.length===0, `${deliveredSamples.length} delivered · ${freeSamples.length} free to non-qualifying clients`);
+    freeSamples.slice(0,15).forEach(s=>{ const lead=(leads||[]).find(l=>l.id===s.lead_id); sFlag('amber','Free sample — should have been charged',`${clientNm(s.client_id)||s.client_name||''} · ${s.item||s.number||'sample'} delivered, but they aren't a ₱1M client and no approved sample charge is on record.`,lead); });
+    const zeroVal=open.filter(l=>!(Number(l.value)>0));
+    sCheck('value','Open deals have a value', zeroVal.length===0, `${zeroVal.length} open lead(s) with no ₱ value`);
+    const noClose=open.filter(l=>!closeOf(l));
+    sCheck('close','Open deals have a close date', noClose.length===0, `${noClose.length} open lead(s) with no expected close`);
+    const soByLead=new Set((salesOrders||[]).filter(o=>!o.deleted_at && o.lead_id).map(o=>o.lead_id));
+    const wonNoSO=won.filter(l=>!soByLead.has(l.id));
+    sCheck('wonso','Won deals have a sales order', wonNoSO.length===0, `${wonNoSO.length} won lead(s) with no SO`);
+    wonNoSO.slice(0,10).forEach(l=>sFlag('amber','Won — but no sales order',`${clientNm(l.client_id)} · ${l.title||''} (${peso(l.value)}) is marked won but has no sales order.`,l));
+    const unassigned=open.filter(l=>!l.manager_id);
+    sCheck('owner','Every open deal has an owner', unassigned.length===0, `${unassigned.length} open lead(s) with no sales manager`);
+    const stuckEst=(sx.estimates||[]).filter(e=>e.status==='sent' && daysBetween(today,e.created_at)>30);
+    sCheck('est','Estimates followed up', stuckEst.length===0, `${stuckEst.length} estimate(s) sent >30 days ago, undecided`);
+
+    // ── SALES MANAGER SCORECARD ─────────────────────────────────────────────
+    const mgrMap={};
+    const ensureM=(id)=>{ const k=id||'__u'; if(!mgrMap[k]) mgrMap[k]={ id, name:id?mgrNm(id):'Unassigned', open:0, pipe:0, stalled:0, past:0, deliveredUnpaid:0, freeSamples:0, won90:0, lost90:0 }; return mgrMap[k]; };
+    open.forEach(l=>{ const g=ensureM(l.manager_id); g.open++; g.pipe+=Number(l.value||0); if(ageOf(l)>=21) g.stalled++; const c=closeOf(l); if(c&&String(c).slice(0,10)<today) g.past++; });
+    live.filter(l=>l.stage==='delivered_pending').forEach(l=>{ ensureM(l.manager_id).deliveredUnpaid+=Number(l.value||0); });
+    won.filter(l=>l.won_at && daysBetween(today,l.won_at)<=90).forEach(l=>ensureM(l.manager_id).won90++);
+    live.filter(l=>l.stage==='lost' && l.stage_changed_at && daysBetween(today,l.stage_changed_at)<=90).forEach(l=>ensureM(l.manager_id).lost90++);
+    freeSamples.forEach(s=>{ const lead=(leads||[]).find(l=>l.id===s.lead_id); ensureM(lead?.manager_id).freeSamples++; });
+    const managers=Object.values(mgrMap).map(g=>({ ...g, winRate:(g.won90+g.lost90)>0?g.won90/(g.won90+g.lost90):null })).sort((x,y)=>y.pipe-x.pipe);
+
+    const metrics={ salesYtd, pct, gap, projected, projectedLinear, weeklyNeeded, openVal, openCount:open.length, winRate, avgDeal, perWeekRecent, totalWonVal, repeat, newc, concentration, freeSamples:freeSamples.length, deliveredSamples:deliveredSamples.length };
+    return { metrics, byStage, alerts, topClients, quiet, sAudit, managers,
       counts:{ stale:stale.length, pastClose:pastClose.length, closingSoon:closingSoon.length, bigAtRisk:bigAtRisk.length } };
-  }, [leads, salesOrders, manualYear, clients, today]);
+  }, [leads, salesOrders, manualYear, clients, sx, today]);
 
   async function saveBrief(auto=false){
     if(!canRun) return; setBusy(true); setMsg('');
     try{
       const wb=weekBounds(today);
       const m=a.metrics;
-      const summary=`${wb.label}: ₱${Math.round(m.salesYtd/1e6*10)/10}M booked (${Math.round(m.pct*100)}% of ₱100M), pacing to ~₱${Math.round(m.projected/1e6)}M by year-end. ${a.alerts.filter(x=>x.severity!=='info').length} deal(s) need attention, ${a.counts.closingSoon} closing this week.`;
-      const { data:ins, error }=await sb.from('sales_reports').insert({ period_label:wb.label, period_start:wb.start, period_end:wb.end, generated_by:profile.id, auto, summary, metrics:m, sections:{ byStage:a.byStage, alerts:a.alerts.map(({lead,...r})=>r), topClients:a.topClients, quiet:a.quiet, counts:a.counts }, alert_count:a.alerts.length }).select('*').single();
+      const summary=`${wb.label}: ₱${Math.round(m.salesYtd/1e6*10)/10}M booked (${Math.round(m.pct*100)}% of ₱100M), pacing to ~₱${Math.round(m.projected/1e6)}M by year-end. ${a.alerts.filter(x=>x.severity!=='info').length} deal(s) need attention, ${a.counts.closingSoon} closing this week${m.freeSamples>0?`, ${m.freeSamples} free sample(s) to chase`:''}.`;
+      const { data:ins, error }=await sb.from('sales_reports').insert({ period_label:wb.label, period_start:wb.start, period_end:wb.end, generated_by:profile.id, auto, summary, metrics:m, sections:{ byStage:a.byStage, alerts:a.alerts.map(({lead,...r})=>r), topClients:a.topClients, quiet:a.quiet, counts:a.counts, audit:{ checks:a.sAudit.checks, flags:a.sAudit.flags.map(({lead,...r})=>r) }, managers:a.managers }, alert_count:a.alerts.length+a.sAudit.flags.length }).select('*').single();
       if(error) throw error;
       try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['admin','agm']); const rows=(ppl||[]).filter(x=>x.id!==profile.id).map(x=>({ recipient_id:x.id, actor_id:profile.id, type:'system', text:`📈 Weekly sales brief — ${summary}`, link_view:'sales-analyst', ref_type:'sales_report', ref_id:ins.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
       setReports(rs=>[ins,...rs]); setBusy(false); setMsg('Saved weekly brief and notified leadership.');
@@ -50516,6 +50554,53 @@ function SalesAnalystView({ profile, profiles, leads, clients, salesOrders, soPa
             <tr key={i} className="border-t"><td className="px-4 py-2">{clientNm(c.id)}</td><td className="px-4 py-2 text-xs text-slate-500">last won {fmtDate(String(c.lastWon).slice(0,10))}</td><td className="px-4 py-2 text-right font-semibold text-slate-600">{peso(c.value)}</td></tr>
           ))}</tbody></table>}
         </div>
+      </div>
+
+      {/* Sales discipline audit */}
+      <div className="grid md:grid-cols-2 gap-4 mt-4">
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">🔍 Sales discipline audit</div>
+          <div className="divide-y">{a.sAudit.checks.map(c=>(
+            <div key={c.key} className="px-4 py-2.5 flex items-start gap-3">
+              <span className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0 ${c.status==='pass'?'bg-emerald-500':c.status==='fail'?'bg-rose-500':'bg-slate-300'}`}>{c.status==='pass'?'✓':c.status==='fail'?'✕':'–'}</span>
+              <div className="min-w-0"><div className="text-sm font-medium text-slate-800">{c.label}</div><div className="text-xs text-slate-500">{c.detail}</div></div>
+            </div>
+          ))}</div>
+        </div>
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">⚠ Discipline flags ({a.sAudit.flags.length})</div>
+          {a.sAudit.flags.length===0 ? <div className="p-8 text-center text-slate-400 text-sm">Nothing flagged — clean sales book. 🎉</div> :
+          <div className="divide-y max-h-[22rem] overflow-y-auto">{a.sAudit.flags.map((f,i)=>{ const sev=AUDIT_SEV[f.severity]||AUDIT_SEV.info; return (
+            <div key={i} className="px-4 py-2.5 flex items-start gap-3 hover:bg-slate-50">
+              <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${sev.dot}`}></span>
+              <div className="flex-1 min-w-0"><div className="text-sm font-medium text-slate-800">{f.title} <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded ${sev.cls}`}>{sev.label}</span></div><div className="text-xs text-slate-500">{f.detail}</div></div>
+              {f.lead && onOpenLead && <button onClick={()=>onOpenLead(f.lead)} className="text-xs text-indigo-600 hover:underline shrink-0">Open →</button>}
+            </div>
+          ); })}</div>}
+        </div>
+      </div>
+
+      {/* Manager scorecard */}
+      <div className="bg-white border rounded-xl overflow-hidden mt-4">
+        <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm flex items-center justify-between"><span>🧑‍💼 Sales manager scorecard</span><span className="text-[11px] text-slate-400">by lead ownership</span></div>
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr>
+            <th className="text-left px-3 py-2">Manager</th><th className="text-right px-3 py-2">Open</th><th className="text-right px-3 py-2">Pipeline</th><th className="text-right px-3 py-2">Win 90d</th><th className="text-right px-3 py-2">Stalled</th><th className="text-right px-3 py-2">Past close</th><th className="text-right px-3 py-2">Delivered unpaid</th><th className="text-right px-3 py-2">Free samples</th>
+          </tr></thead>
+          <tbody>{a.managers.map((g,i)=>(
+            <tr key={i} className="border-t hover:bg-slate-50">
+              <td className="px-3 py-2 font-medium">{g.name}</td>
+              <td className="px-3 py-2 text-right">{g.open}</td>
+              <td className="px-3 py-2 text-right">{peso(g.pipe)}</td>
+              <td className="px-3 py-2 text-right">{g.winRate==null?'—':Math.round(g.winRate*100)+'%'}</td>
+              <td className={`px-3 py-2 text-right ${g.stalled>0?'text-amber-600 font-semibold':''}`}>{g.stalled}</td>
+              <td className={`px-3 py-2 text-right ${g.past>0?'text-rose-600 font-semibold':''}`}>{g.past}</td>
+              <td className="px-3 py-2 text-right text-amber-700">{peso(g.deliveredUnpaid)}</td>
+              <td className={`px-3 py-2 text-right ${g.freeSamples>0?'text-rose-600 font-semibold':''}`}>{g.freeSamples}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+        <div className="px-4 py-2 text-[11px] text-slate-400">Stalled = no stage movement in 21+ days · Past close = open past its expected close · Delivered unpaid = won &amp; delivered, awaiting payment · based on current lead ownership.</div>
       </div>
 
       {/* Saved briefs */}
