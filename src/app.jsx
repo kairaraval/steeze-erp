@@ -10,7 +10,7 @@ const SUPABASE_URL = 'https://hibcadppdeeizlzlttjg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SGio3QfYUy5Rk42hKzjYmA_VHrD4zjM';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const BUCKET = 'Attachments';
-const BUILD = "Live build 1011 · New: AI Purchasing Auditor (Purchasing → AI Auditor, for Purchasing, Admin & AGM). A read-only helper that keeps the PR→PO→receive→pay flow clean and spending in check. Procurement hygiene: approved purchase requests stuck without a PO, POs past their expected delivery and still not received, received-but-unpaid POs, anything paid before the goods arrived, stale drafts, and short deliveries. Spend & price control: spend this month, price variance on items bought at very different prices across POs (shows the range + last price paid), and possible duplicate POs. Supplier scorecard: on-time delivery %, short deliveries, returns, and open supplier credit, ranked by spend. Buy-smart: a reorder buy-list of items below their reorder point that aren't already on a PO, plus negative stock and no-supplier flags. Every flag opens the exact PO. Run & save a report (notifies Purchasing) and print it to PDF. · Build 1010: Moved the AI Auditor to the top of the Finance menu, right under Home. · Build 1009: AI Auditor: the overdue receivables now have their own collection list with a filter by sales manager — pick a manager to see only their overdue orders (client, due date, days late, amount), with a running total, each opening the order. · Build 1008: AI Accounting Auditor now does an intensive AR audit: each order's payment deadline (invoice due date, else delivery + payment terms like Net 30/15/60) is checked, total AR and overdue AR are broken down per sales manager (so you see who has the most to collect), and the biggest/oldest overdue receivables are flagged as a collection priority list — each opening the order. · Build 1007: AI Sales Analyst now audits the sales book too: flags samples delivered free to clients that aren't ₱1M/yr clients (your free-sample rule) with no approved sample charge on record; runs discipline checks (open deals with no value or no close date, won deals with no sales order, unassigned leads, estimates sent >30 days and undecided); and adds a Sales Manager Scorecard — per manager: open deals, pipeline, win rate, stalled deals, past-close deals, delivered-unpaid, and free samples — so you can audit each manager's follow-through. · Build 1006: New: AI Sales Analyst (Executive → AI Sales Analyst, for Admin & AGM). A live read on the number: progress and forecast to ₱100M (booked YTD, gap, projected year-end at recent pace, weekly run-rate needed), open pipeline by stage with win rate and average deal size, deal alerts (big deals at risk, stalled with no movement, past expected close, closing this week — each opening the lead), and client insight (top clients, repeat vs new, and a win-back list of clients gone quiet 90+ days). Run & save a weekly brief that notifies leadership. Deterministic analytics for now; the AI write-up comes next. · Build 1005: AI Auditor flagged check deep-links to that specific check’s details. · Build 1004: AI Auditor payroll check reworked for how payroll actually works today: payroll is run in Sprout and Accounting records each weekly & monthly payroll here as a Journal Entry or RFP. The auditor now confirms a payroll JV/RFP exists for every Friday (weekly) and around the 15th and month-end (monthly), instead of looking at the unused OS payroll module — so it correctly recognises the WEEK 1/2 and monthly payroll JVs. · Build 1003: AI Auditor 'Open →' on a flagged item now jumps straight to that exact record — the specific RFP, sales order, cash advance (DV / owner / petty cash) or budget request opens in its own screen, instead of dumping you on the whole list page. · Build 1002: AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
+const BUILD = "Live build 1012 · New: AI Production Manager (Production → AI Production Manager, for Anjelica & the production team, Admin, AGM and Sales). Anjelica's production co-pilot — the whole floor at a glance plus what needs her attention today. At a glance: active jobs, pieces on the floor, what's shipping this week, and a live count of jobs in every stage. Needs attention: overdue jobs, jobs due within 3 days not yet ready, jobs blocked on materials (past cutting but materials not all in), deadlines moved 2+ times, jobs aging 21+ days on the floor, and jobs with no due date — each opens the exact job on the Production Board. Bottleneck & flow: which stage is clogging the floor (job count + pieces + average age), and partial deliveries with pieces still owed. Load & on-time: on-time delivery rate, a production health checklist, and workload per sales owner. Run & save a brief (notifies the production team) and print it to PDF. Deterministic for now; the AI write-up comes next. · Build 1011 · New: AI Purchasing Auditor (Purchasing → AI Auditor, for Purchasing, Admin & AGM). A read-only helper that keeps the PR→PO→receive→pay flow clean and spending in check. Procurement hygiene: approved purchase requests stuck without a PO, POs past their expected delivery and still not received, received-but-unpaid POs, anything paid before the goods arrived, stale drafts, and short deliveries. Spend & price control: spend this month, price variance on items bought at very different prices across POs (shows the range + last price paid), and possible duplicate POs. Supplier scorecard: on-time delivery %, short deliveries, returns, and open supplier credit, ranked by spend. Buy-smart: a reorder buy-list of items below their reorder point that aren't already on a PO, plus negative stock and no-supplier flags. Every flag opens the exact PO. Run & save a report (notifies Purchasing) and print it to PDF. · Build 1010: Moved the AI Auditor to the top of the Finance menu, right under Home. · Build 1009: AI Auditor: the overdue receivables now have their own collection list with a filter by sales manager — pick a manager to see only their overdue orders (client, due date, days late, amount), with a running total, each opening the order. · Build 1008: AI Accounting Auditor now does an intensive AR audit: each order's payment deadline (invoice due date, else delivery + payment terms like Net 30/15/60) is checked, total AR and overdue AR are broken down per sales manager (so you see who has the most to collect), and the biggest/oldest overdue receivables are flagged as a collection priority list — each opening the order. · Build 1007: AI Sales Analyst now audits the sales book too: flags samples delivered free to clients that aren't ₱1M/yr clients (your free-sample rule) with no approved sample charge on record; runs discipline checks (open deals with no value or no close date, won deals with no sales order, unassigned leads, estimates sent >30 days and undecided); and adds a Sales Manager Scorecard — per manager: open deals, pipeline, win rate, stalled deals, past-close deals, delivered-unpaid, and free samples — so you can audit each manager's follow-through. · Build 1006: New: AI Sales Analyst (Executive → AI Sales Analyst, for Admin & AGM). A live read on the number: progress and forecast to ₱100M (booked YTD, gap, projected year-end at recent pace, weekly run-rate needed), open pipeline by stage with win rate and average deal size, deal alerts (big deals at risk, stalled with no movement, past expected close, closing this week — each opening the lead), and client insight (top clients, repeat vs new, and a win-back list of clients gone quiet 90+ days). Run & save a weekly brief that notifies leadership. Deterministic analytics for now; the AI write-up comes next. · Build 1005: AI Auditor flagged check deep-links to that specific check’s details. · Build 1004: AI Auditor payroll check reworked for how payroll actually works today: payroll is run in Sprout and Accounting records each weekly & monthly payroll here as a Journal Entry or RFP. The auditor now confirms a payroll JV/RFP exists for every Friday (weekly) and around the 15th and month-end (monthly), instead of looking at the unused OS payroll module — so it correctly recognises the WEEK 1/2 and monthly payroll JVs. · Build 1003: AI Auditor 'Open →' on a flagged item now jumps straight to that exact record — the specific RFP, sales order, cash advance (DV / owner / petty cash) or budget request opens in its own screen, instead of dumping you on the whole list page. · Build 1002: AI Accounting Auditor now covers the whole finance module: DV & Owner advances must be liquidated within 2 days of request (and petty cash + budget requests are checked too), returned cash must be tagged (kept on hand or deposited where), outstanding/stale checks and unlinked checks are monitored, journal entries must balance, overdue invoices are listed, and expenses must be classified to an account — on top of the payroll, RFP, AR and sales-order checks. · Build 1001: AI Accounting Auditor (Finance → AI Auditor). A read-only monthly audit of the books — confirms the semi-monthly (15th/30th) and weekly payrolls and subcon payroll are recorded, checks that paid RFPs have vouchers and cash advances were liquidated, reconciles Sales Orders against verified payments, ages the receivables, and flags overpayments and possible duplicate payments. Pick a month, Run & save a report (it notifies Accounting), and print it to PDF. Deterministic rule checks for now; the AI narrative layer comes next. · Build 1000: budget requests now go to the AGM first. Every new budget request notifies the AGM and lands on her 'For Approval' page; she approves (or returns) it before it reaches Finance for final approval. The Finance approve button is held until the AGM has approved. Existing pending requests were routed to the AGM too. · Build 999: Fix: the Subcon Sewing Payroll sheet showed 'Project' instead of the client on every line. The lookup was querying columns that don't exist (lead client_name, client 'name' instead of 'company'), so the client/project data came back empty. Each payroll line now shows the client and project name. · Build 998: a DV-day cash advance where nothing was spent (the whole amount is being returned) can now be signed and submitted to the AGM — previously it was blocked because it had no purchase lines, so you could never sign, which left 'Submit to AGM' greyed out. A pure return of unused funds now goes through. · Build 997: DV-day cash advances now handle the returned cash. The liquidation shows '₱X cash to return to Accounting', and when Finance posts it they tag where the money went — kept as Cash on Hand, or deposited to a specific bank (posts the deposit). The Cash Advance list has a new 'Returned' column so you can see returned money per advance, with where it landed. · Build 996: the Marketing Copy/caption and Notes boxes now have a Preview ⇄ Edit toggle. A saved post opens showing the formatted text with the bold visible; click ✎ Edit (or the text) to change it, then ✓ Done to go back to the clean preview. New posts open ready to type. · Build 995: Bold in the Marketing Copy/caption and Notes boxes (B button, Cmd/Ctrl+B, or **markdown**). · Build 994: you can now bold text in activity notes/comments. Select text and click the B button (or press Cmd/Ctrl+B), or type **like this** — it shows up bold in the posted note. Works with @mentions and tables too. · Build 993: the version tag at the bottom-right now shows just the build number for everyone (admins can hover or tap it to read the full changelog), so it no longer covers the screen. · Build 992: Fix: released Traditional/Subli sorting reports were disappearing from Subcon Sewing once the production job was already marked 'delivered' — so recently released work to a subcon (e.g. Ruben · FWD, Irene · Rosehill) didn't cross over for payroll even after Save batch / Save report. A released report still out to a real subcon now stays visible in Subcon Sewing so it can be reconciled and paid. · Build 991: the app could auto-refresh onto a newer build WHILE a form/modal was open — wiping an in-progress entry (e.g. a Request for Payment being filled in) so it looked like the page refreshed and the submission didn't go through. The auto-update now waits until no modal is open before refreshing. · Build 990: Stock Movements now shows a 'Balance after' column — each item's running on-hand right after every IN/OUT entry (the newest row matches today's actual stock), so Purchasing can monitor the real balance line by line. · Build 989: Returns to Supplier. When you send fabric/goods back to a supplier, log it properly instead of entering a negative line on a purchase. On a received/partial PO click '↩ Return', or open Purchasing → Returns to Supplier. Pick the items + qty, then choose how the supplier settles: a cash Refund (money back — on-hand drops and the GL posts Dr Cash/Bank · Cr the purchase account, a true purchase return) or a Credit for the next purchase (recorded as a note; Accounting applies it on the next PO). On-hand stock drops automatically for every linked item. Open supplier-credit total is shown on the Returns page.";
 
 // Steeze lightning-bolt logo. Defined once and reused on the login screen,
 // sidebar, and anywhere else we need to render the brand mark.
@@ -12602,7 +12602,7 @@ function MaterialsStatusModal({ job, matchId, field='linked_lead_id', leadTitle,
     </Modal>
   );
 }
-function ProductionBoard({ profile, profiles, jobs, leads, items, requests, orders, activityCounts, reload, openActivity, openTechpack, onCreateDR, subcons, readOnly }){
+function ProductionBoard({ profile, profiles, jobs, leads, items, requests, orders, activityCounts, reload, openActivity, openTechpack, onCreateDR, subcons, readOnly, openId, onOpenConsumed }){
   // Helper to build the DR prefill context from a production job + linked lead.
   // Triggered by the "Create DR" button below; the App passes setDrCreateCtx
   // as onCreateDR so the DR modal opens with everything ready to go.
@@ -12627,6 +12627,8 @@ function ProductionBoard({ profile, profiles, jobs, leads, items, requests, orde
   const [viewMode,setViewMode]=useState('active'); const [search,setSearch]=useState('');
   const [filterStatus,setFilterStatus]=useState(''); const [filterDeadline,setFilterDeadline]=useState('');
   const [filterOwner,setFilterOwner]=useState('');
+  // Deep-link from the AI Production Manager: filter the board down to one job.
+  useEffect(()=>{ if(openId){ const j=(jobs||[]).find(x=>x.id===openId); if(j){ setViewMode('all'); setFilterStatus(''); setFilterDeadline(''); setFilterOwner(''); setSearch(j.number||j.client_name||''); } onOpenConsumed && onOpenConsumed(); } },[openId]);
   const [sortBy,setSortBy]=useState(()=>{ try{ return localStorage.getItem('prodSort')||'due_asc'; }catch(e){ return 'due_asc'; } });
   function changeSort(v){ setSortBy(v); try{ localStorage.setItem('prodSort',v); }catch(e){} }
   const [layout,setLayout]=useState(()=>{ try{ return localStorage.getItem('prodLayout')||'table'; }catch(e){ return 'table'; } });
@@ -50899,6 +50901,246 @@ function PurchasingReportDoc({ report, profile, onClose }){
   );
 }
 
+/* ═══════════════════ AI PRODUCTION MANAGER (Phase 1) ═══════════════════════
+   Anjelica's production co-pilot: the whole floor at a glance, a triage list of
+   what needs attention today, where the bottleneck is, and an on-time scorecard.
+   Read-only, deterministic. Flags deep-link to the job on the Production Board. */
+function ProductionManagerView({ profile, profiles, prodJobs, leads, clients, requests, orders, reload, navTo, onOpenJob }){
+  const canRun = ['admin','agm','production','production_supervisor','production_assistant'].includes(profile.role);
+  const today = todayManila();
+  const [reports,setReports]=useState([]);
+  const [printing,setPrinting]=useState(null);
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState('');
+  const [tab,setTab]=useState('attention');
+  useEffect(()=>{ (async()=>{ try{ const { data }=await sb.from('production_reports').select('*').is('deleted_at',null).order('period_start',{ascending:false}); setReports(data||[]); }catch(_){} })(); },[]);
+  const ageDays=(d)=>d?Math.floor((new Date(today)-new Date(String(d).slice(0,10)))/864e5):null;
+  const daysUntil=(d)=>d?Math.floor((new Date(String(d).slice(0,10))-new Date(today))/864e5):null;
+  const ownerNm=(id)=>(profiles||[]).find(p=>p.id===id)?.name||'Unassigned';
+  const stageIdx=(k)=>PRODUCTION_STATUSES.findIndex(s=>s.key===k);
+  const stageLbl=(k)=>PRODUCTION_STATUSES.find(s=>s.key===k)?.label||k||'—';
+  const SHIP_STAGES=['ready for delivery','in transit'];
+  const CUT_IDX=stageIdx('cutting - in house'); // materials truly needed from cutting onward
+
+  const a = useMemo(()=>{
+    const all=(prodJobs||[]).filter(j=>!j.deleted_at);
+    const live=all.filter(j=>!PRODUCTION_DONE.includes(j.status));
+    const remaining=(j)=>{ const t=Number(j.quantity||0); const d=prodDeliveredSum(j); return Math.max(0, t-(d||0)); };
+    const flags=[]; const checks=[];
+    const chk=(key,lbl,ok,detail)=>checks.push({ key, label:lbl, status: ok==null?'na':(ok?'pass':'fail'), detail });
+    const flag=(sev,title,detail,job,bucket)=>flags.push({ severity:sev, title, detail, bucket, job_id:job?.id, job });
+
+    // ── At a glance ──
+    const perStage=PRODUCTION_STATUSES.filter(s=>!PRODUCTION_DONE.includes(s.key)).map(s=>({ key:s.key, label:s.label, color:s.color, count:live.filter(j=>j.status===s.key).length })).filter(s=>s.count>0);
+    const totalPieces=live.reduce((s,j)=>s+remaining(j),0);
+    const shipping=live.filter(j=>SHIP_STAGES.includes(j.status) || (j.due_date && daysUntil(j.due_date)>=0 && daysUntil(j.due_date)<=7));
+
+    // ── Needs attention ──
+    const overdue=live.filter(j=>j.due_date && String(j.due_date)<today);
+    chk('overdue','No overdue jobs', overdue.length===0, overdue.length?`${overdue.length} active job(s) past their due date`:'Everything on schedule');
+    overdue.sort((x,y)=>String(x.due_date).localeCompare(String(y.due_date))).forEach(j=>flag(ageDays(j.due_date)>7?'red':'amber','Overdue',`${j.number||''} · ${j.client_name||''} (${j.item||''}) — due ${fmtDate(j.due_date)}, ${ageDays(j.due_date)}d late · ${stageLbl(j.status)} · ${remaining(j)} pcs left`,j,'attention'));
+    const dueSoon=live.filter(j=>j.due_date && daysUntil(j.due_date)>=0 && daysUntil(j.due_date)<=3 && !SHIP_STAGES.includes(j.status));
+    chk('duesoon','Jobs due ≤3 days are shipping-ready', dueSoon.length===0, dueSoon.length?`${dueSoon.length} job(s) due within 3 days not yet ready for delivery`:'None at the wire');
+    dueSoon.sort((x,y)=>String(x.due_date).localeCompare(String(y.due_date))).forEach(j=>flag('amber','Due very soon',`${j.number||''} · ${j.client_name||''} — due ${fmtDate(j.due_date)} (in ${daysUntil(j.due_date)}d) but only at ${stageLbl(j.status)}`,j,'attention'));
+    // Blocked on materials: past cutting stage but materials not all in
+    const blocked=live.filter(j=>{ if(stageIdx(j.status)<CUT_IDX) return false; if(j.materials_complete_at) return false; const ms=projectMaterialsStatus(j.lead_id, requests, orders); return ms.state!=='none' && (ms.pending>0 || ms.state==='awaiting'); });
+    chk('mat','Jobs in production have materials', blocked.length===0, blocked.length?`${blocked.length} job(s) in/after cutting with materials not fully in`:'Materials keeping up with the floor');
+    blocked.forEach(j=>{ const ms=projectMaterialsStatus(j.lead_id, requests, orders); flag('red','Blocked on materials',`${j.number||''} · ${j.client_name||''} at ${stageLbl(j.status)} but ${ms.pending||'some'} material line(s) not yet in (${ms.ready}/${ms.total} ready)`,j,'attention'); });
+    // Deadline moved repeatedly
+    const moved=live.filter(j=>Array.isArray(j.due_date_history) && j.due_date_history.filter(h=>h&&h.to).length>=2);
+    chk('moved','Deadlines are stable', moved.length===0, moved.length?`${moved.length} job(s) had their deadline moved 2+ times`:'No repeatedly-slipped deadlines');
+    moved.forEach(j=>{ const n=j.due_date_history.filter(h=>h&&h.to).length; const orig=j.original_due_date; flag('amber','Deadline slipped repeatedly',`${j.number||''} · ${j.client_name||''} — deadline moved ${n}×${orig?` (originally ${fmtDate(orig)}, now ${fmtDate(j.due_date)})`:''}`,j,'attention'); });
+    // Aging WIP (proxy for stuck): old job still active, not near shipping
+    const aging=live.filter(j=>!SHIP_STAGES.includes(j.status) && ageDays(j.created_at)>=21);
+    chk('aging','Jobs flowing through', aging.length===0, aging.length?`${aging.length} job(s) open 21+ days and not yet near delivery`:'Floor is flowing');
+    aging.sort((x,y)=>ageDays(y.created_at)-ageDays(x.created_at)).slice(0,15).forEach(j=>flag('info','Aging on the floor',`${j.number||''} · ${j.client_name||''} — ${ageDays(j.created_at)}d since created, still at ${stageLbl(j.status)}`,j,'attention'));
+    // No due date
+    const noDue=live.filter(j=>!j.due_date);
+    chk('nodue','Every active job has a due date', noDue.length===0, noDue.length?`${noDue.length} active job(s) with no deadline set`:'All jobs scheduled');
+    noDue.slice(0,15).forEach(j=>flag('info','No due date',`${j.number||''} · ${j.client_name||''} (${j.item||''}) at ${stageLbl(j.status)} — no deadline set`,j,'attention'));
+
+    // ── Bottleneck / flow ──
+    const stageLoad=PRODUCTION_STATUSES.filter(s=>!PRODUCTION_DONE.includes(s.key) && !SHIP_STAGES.includes(s.key)).map(s=>{ const js=live.filter(j=>j.status===s.key); const ages=js.map(j=>ageDays(j.created_at)||0); const avgAge=ages.length?Math.round(ages.reduce((x,y)=>x+y,0)/ages.length):0; return { key:s.key, label:s.label, count:js.length, pieces:js.reduce((x,j)=>x+remaining(j),0), avgAge }; }).filter(s=>s.count>0).sort((x,y)=>y.count-x.count || y.avgAge-x.avgAge);
+    const bottleneck=stageLoad[0]||null;
+    // Partial deliveries owing
+    const partials=live.filter(j=>prodDeliveredSum(j)>0 && remaining(j)>0).map(j=>({ id:j.id, job:j, number:j.number, client:j.client_name, item:j.item, delivered:prodDeliveredSum(j), total:Number(j.quantity||0), left:remaining(j), due:j.due_date })).sort((x,y)=>y.left-x.left);
+
+    // ── On-time scorecard ──
+    const lastDelDate=(j)=>{ const ds=(Array.isArray(j.deliveries)?j.deliveries:[]).map(d=>String(d.at||d.date||'').slice(0,10)).filter(Boolean); return ds.length?ds.sort().slice(-1)[0]:null; };
+    const deliveredJobs=all.filter(j=>j.status==='delivered');
+    const scored=deliveredJobs.filter(j=>j.due_date && lastDelDate(j));
+    const onTime=scored.filter(j=>lastDelDate(j)<=String(j.due_date)).length;
+    const onTimeRate=scored.length?onTime/scored.length:null;
+    chk('ontime','Healthy on-time delivery', onTimeRate==null||onTimeRate>=0.8, onTimeRate==null?'Not enough dated deliveries to score yet':`On-time delivery ${Math.round(onTimeRate*100)}% (${onTime}/${scored.length} delivered on/before due date)`);
+    // Per-owner load
+    const byOwner={}; live.forEach(j=>{ const id=j.sales_owner_id||'__'; const g=byOwner[id]||(byOwner[id]={ id:j.sales_owner_id, jobs:0, pieces:0, overdue:0 }); g.jobs++; g.pieces+=remaining(j); if(j.due_date && String(j.due_date)<today) g.overdue++; });
+    const owners=Object.values(byOwner).map(g=>({ ...g, name:g.id?ownerNm(g.id):'Unassigned' })).sort((x,y)=>y.jobs-x.jobs);
+
+    const metrics={ active:live.length, pieces:totalPieces, shipping:shipping.length, overdue:overdue.length, blocked:blocked.length, bottleneck:bottleneck?bottleneck.label:'—', bottleneckCount:bottleneck?bottleneck.count:0, onTimeRate, deliveredScored:scored.length };
+    const pass=checks.filter(c=>c.status==='pass').length, fail=checks.filter(c=>c.status==='fail').length;
+    return { flags, checks, metrics, perStage, stageLoad, bottleneck, partials, owners, shipping, pass, fail };
+  }, [prodJobs, leads, clients, requests, orders, today]);
+
+  async function saveReport(auto=false){
+    if(!canRun) return; setBusy(true); setMsg('');
+    try{
+      const m=a.metrics; const red=a.flags.filter(f=>f.severity==='red').length;
+      const summary=`${m.active} active job(s), ${m.pieces.toLocaleString()} pcs on the floor · ${m.overdue} overdue, ${m.blocked} blocked on materials · bottleneck: ${m.bottleneck} (${m.bottleneckCount}) · ${m.shipping} shipping this week${m.onTimeRate!=null?` · ${Math.round(m.onTimeRate*100)}% on-time`:''}.`;
+      const wb=monthBounds(today.slice(0,7));
+      const { data:ins, error }=await sb.from('production_reports').insert({ period_label:wb.label, period_start:wb.start, period_end:wb.end, generated_by:profile.id, auto, summary, active_count:m.active, attention_count:a.flags.length, metrics:m, sections:{ checks:a.checks, flags:a.flags.map(({job,...r})=>r), perStage:a.perStage, stageLoad:a.stageLoad, partials:a.partials.map(({job,...r})=>r), owners:a.owners } }).select('*').single();
+      if(error) throw error;
+      try{ const { data:ppl }=await sb.from('profiles').select('id').in('role',['admin','agm','production','production_supervisor','production_assistant']); const rows=(ppl||[]).filter(x=>x.id!==profile.id).map(x=>({ recipient_id:x.id, actor_id:profile.id, type:'system', text:`🏭 Production brief — ${summary}`, link_view:'prod-manager', ref_type:'production_report', ref_id:ins.id })); if(rows.length) await sb.from('notifications').insert(rows); }catch(_){}
+      setReports(rs=>[ins,...rs]); setBusy(false); setMsg('Saved and sent to the production team.');
+    }catch(e){ setBusy(false); setMsg(e.message||String(e)); }
+  }
+  async function delReport(r){ if(!confirm('Delete this report?')) return; await sb.from('production_reports').update({ deleted_at:new Date().toISOString() }).eq('id',r.id); setReports(rs=>rs.filter(x=>x.id!==r.id)); }
+
+  const m=a.metrics; const maxLoad=Math.max(1,...a.stageLoad.map(s=>s.count));
+  const attn=a.flags.filter(f=>f.bucket==='attention');
+  return (
+    <div className="p-6">
+      <div className="sticky top-0 z-20 -mx-6 -mt-6 px-6 pt-5 pb-3 mb-4 bg-slate-100/95 backdrop-blur border-b border-slate-200">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div><h1 className="text-2xl font-bold">🏭 AI Production Manager</h1><p className="text-slate-500 text-sm">The whole floor at a glance, what needs attention, where the bottleneck is, and on-time performance. Read-only.</p></div>
+          <div className="flex items-center gap-2">
+            {canRun && <button onClick={()=>saveReport(false)} disabled={busy} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{busy?'Saving…':'📌 Run & save brief'}</button>}
+            <button onClick={()=>setPrinting({ label:monthBounds(today.slice(0,7)).label, checks:a.checks, flags:a.flags, metrics:m, perStage:a.perStage, stageLoad:a.stageLoad, partials:a.partials, owners:a.owners })} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 PDF</button>
+          </div>
+        </div>
+        {msg && <div className="text-xs text-emerald-700 mt-2">{msg}</div>}
+      </div>
+
+      {/* At a glance */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Active jobs</div><div className="text-2xl font-bold text-indigo-700">{m.active}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Pieces on floor</div><div className="text-2xl font-bold text-slate-800">{m.pieces.toLocaleString()}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Shipping this week</div><div className="text-2xl font-bold text-emerald-600">{m.shipping}</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">Overdue</div><div className={`text-2xl font-bold ${m.overdue>0?'text-rose-600':'text-slate-800'}`}>{m.overdue}</div><div className="text-[10px] text-slate-400">{m.blocked} blocked on materials</div></div>
+        <div className="rounded-xl border bg-white p-4"><div className="text-[10px] uppercase text-slate-400">On-time</div><div className="text-2xl font-bold text-slate-800">{m.onTimeRate==null?'—':Math.round(m.onTimeRate*100)+'%'}</div><div className="text-[10px] text-slate-400">bottleneck: {m.bottleneck}</div></div>
+      </div>
+
+      <div className="flex gap-1 mb-4 flex-wrap">
+        {[['attention',`⚠ Needs attention (${attn.length})`],['flow','🔀 Bottleneck & flow'],['scorecard','📊 Load & on-time'],['saved','🗂 Saved briefs']].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${tab===k?'bg-indigo-600 text-white':'bg-white border text-slate-600 hover:bg-slate-50'}`}>{l}</button>
+        ))}
+      </div>
+
+      {tab==='attention' && (
+        <div className="grid md:grid-cols-3 gap-4">
+          <div className="md:col-span-1 bg-white border rounded-xl overflow-hidden h-max">
+            <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">Pipeline now</div>
+            <div className="divide-y max-h-[32rem] overflow-y-auto">{a.perStage.map(s=>(
+              <div key={s.key} className="px-4 py-2 flex items-center justify-between text-sm"><span className={`text-[11px] px-1.5 py-0.5 rounded font-semibold ${s.color}`}>{s.label}</span><span className="font-bold text-slate-700">{s.count}</span></div>
+            ))}{a.perStage.length===0 && <div className="p-6 text-center text-slate-400 text-sm">No active jobs.</div>}</div>
+          </div>
+          <div className="md:col-span-2 bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">⚠ What needs attention ({attn.length})</div>
+            {attn.length===0 ? <div className="p-8 text-center text-slate-400 text-sm">Nothing urgent on the floor. 🎉</div> :
+            <div className="divide-y max-h-[32rem] overflow-y-auto">{attn.map((f,i)=>{ const sev=AUDIT_SEV[f.severity]||AUDIT_SEV.info; return (
+              <div key={i} className="px-4 py-2.5 flex items-start gap-3 hover:bg-slate-50">
+                <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${sev.dot}`}></span>
+                <div className="flex-1 min-w-0"><div className="text-sm font-medium text-slate-800">{f.title} <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded ${sev.cls}`}>{sev.label}</span></div><div className="text-xs text-slate-500">{f.detail}</div></div>
+                {f.job && onOpenJob && <button onClick={()=>onOpenJob(f.job)} className="text-xs text-indigo-600 hover:underline shrink-0">Open →</button>}
+              </div>
+            ); })}</div>}
+          </div>
+        </div>
+      )}
+
+      {tab==='flow' && (
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">🔀 Stage load — where work is piling up</div>
+            {a.bottleneck && <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-800"><strong>Bottleneck:</strong> {a.bottleneck.label} — {a.bottleneck.count} jobs ({a.bottleneck.pieces.toLocaleString()} pcs), avg {a.bottleneck.avgAge}d old.</div>}
+            <div className="divide-y">{a.stageLoad.map(s=>(
+              <div key={s.key} className="px-4 py-2">
+                <div className="flex items-center justify-between text-sm mb-1"><span className="font-medium text-slate-700">{s.label}</span><span className="text-slate-500 text-xs">{s.count} jobs · {s.pieces.toLocaleString()} pcs · avg {s.avgAge}d</span></div>
+                <div className="h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-indigo-500" style={{width:`${Math.round(s.count/maxLoad*100)}%`}}></div></div>
+              </div>
+            ))}{a.stageLoad.length===0 && <div className="p-6 text-center text-slate-400 text-sm">No active jobs.</div>}</div>
+          </div>
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">📦 Partial deliveries — pieces still owed ({a.partials.length})</div>
+            {a.partials.length===0 ? <div className="p-6 text-center text-slate-400 text-sm">No half-shipped orders.</div> :
+            <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Job</th><th className="text-right px-3 py-2">Delivered</th><th className="text-right px-3 py-2">Left</th><th className="text-left px-3 py-2">Due</th><th></th></tr></thead>
+            <tbody>{a.partials.slice(0,25).map((x,i)=>(
+              <tr key={i} className="border-t hover:bg-slate-50"><td className="px-3 py-2"><div className="font-medium">{x.number||''}</div><div className="text-[10px] text-slate-400">{x.client||''} · {x.item||''}</div></td><td className="px-3 py-2 text-right text-slate-500">{x.delivered.toLocaleString()}/{x.total.toLocaleString()}</td><td className="px-3 py-2 text-right font-semibold text-amber-600">{x.left.toLocaleString()}</td><td className="px-3 py-2 text-xs">{x.due?fmtDate(x.due):'—'}</td><td className="px-3 py-2 text-right">{x.job&&onOpenJob&&<button onClick={()=>onOpenJob(x.job)} className="text-xs text-indigo-600 hover:underline">Open →</button>}</td></tr>
+            ))}</tbody></table></div>}
+          </div>
+        </div>
+      )}
+
+      {tab==='scorecard' && (
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">✓ Production health</div>
+            <div className="divide-y">{a.checks.map(c=>(
+              <div key={c.key} className="px-4 py-2.5 flex items-start gap-3">
+                <span className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0 ${c.status==='pass'?'bg-emerald-500':c.status==='fail'?'bg-rose-500':'bg-slate-300'}`}>{c.status==='pass'?'✓':c.status==='fail'?'✕':'–'}</span>
+                <div className="min-w-0"><div className="text-sm font-medium text-slate-800">{c.label}</div><div className="text-xs text-slate-500">{c.detail}</div></div>
+              </div>
+            ))}</div>
+          </div>
+          <div className="bg-white border rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">👤 Load by sales owner</div>
+            <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="text-left px-3 py-2">Owner</th><th className="text-right px-3 py-2">Jobs</th><th className="text-right px-3 py-2">Pieces</th><th className="text-right px-3 py-2">Overdue</th></tr></thead>
+            <tbody>{a.owners.map((g,i)=>(
+              <tr key={i} className="border-t hover:bg-slate-50"><td className="px-3 py-2 font-medium">{g.name}</td><td className="px-3 py-2 text-right">{g.jobs}</td><td className="px-3 py-2 text-right">{g.pieces.toLocaleString()}</td><td className={`px-3 py-2 text-right ${g.overdue>0?'text-rose-600 font-semibold':'text-slate-400'}`}>{g.overdue||'—'}</td></tr>
+            ))}</tbody></table></div>
+          </div>
+        </div>
+      )}
+
+      {tab==='saved' && (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b bg-slate-50 font-semibold text-sm">🗂 Saved briefs</div>
+          {reports.length===0 ? <div className="p-6 text-center text-slate-400 text-sm">No saved briefs yet.</div> :
+          <table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="text-left px-4 py-2">Period</th><th className="text-left px-4 py-2">Generated</th><th className="text-center px-4 py-2">Attention</th><th className="text-left px-4 py-2">Summary</th><th></th></tr></thead>
+          <tbody>{reports.map(r=>(
+            <tr key={r.id} className="border-t hover:bg-slate-50">
+              <td className="px-4 py-2 font-medium">{r.period_label}</td>
+              <td className="px-4 py-2 text-xs text-slate-500">{fmtDate(String(r.generated_at).slice(0,10))}</td>
+              <td className="px-4 py-2 text-center font-semibold">{r.attention_count}</td>
+              <td className="px-4 py-2 text-xs text-slate-600 max-w-[24rem] truncate" title={r.summary}>{r.summary}</td>
+              <td className="px-4 py-2 text-right whitespace-nowrap"><button onClick={()=>setPrinting({ label:r.period_label, checks:(r.sections||{}).checks||[], flags:(r.sections||{}).flags||[], metrics:r.metrics||{}, perStage:(r.sections||{}).perStage||[], stageLoad:(r.sections||{}).stageLoad||[], partials:(r.sections||{}).partials||[], owners:(r.sections||{}).owners||[] })} className="text-xs text-slate-600 hover:underline mr-2">🖨 PDF</button>{canRun && <button onClick={()=>delReport(r)} className="text-xs text-rose-500 hover:underline">Delete</button>}</td>
+            </tr>
+          ))}</tbody></table>}
+        </div>
+      )}
+
+      {printing && <ProductionReportDoc report={printing} profile={profile} onClose={()=>setPrinting(null)} />}
+    </div>
+  );
+}
+
+function ProductionReportDoc({ report, profile, onClose }){
+  const sev=(s)=>AUDIT_SEV[s]||AUDIT_SEV.info; const m=report.metrics||{};
+  return (
+    <Modal title={`Production Brief · ${report.label}`} onClose={onClose} wide>
+      <style>{`@media print{ body *{visibility:hidden !important;} .prod-sheet,.prod-sheet *{visibility:visible !important;} .prod-sheet{position:absolute;left:0;top:0;width:100%;padding:24px;} .no-print{display:none !important;} }`}</style>
+      <div className="space-y-3">
+        <div className="no-print flex justify-end"><button onClick={()=>printAs(`Production Brief - ${report.label}`)} className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">🖨 Print / Save PDF</button></div>
+        <div className="prod-sheet text-[12px] text-slate-800">
+          <div className="flex items-center justify-between border-b pb-2 mb-3"><div><div className="text-lg font-extrabold tracking-wide">STEEZE</div><div className="text-[11px] text-slate-500 uppercase tracking-wider">Production Brief — {report.label}</div></div><div className="text-right text-xs text-slate-500"><div>Generated {fmtDate(todayManila())}</div><div>{profile.name||profile.email}</div></div></div>
+          <div className="grid grid-cols-5 gap-2 mb-3 text-center">
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Active</div><div className="font-bold">{m.active||0}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Pieces</div><div className="font-bold">{(m.pieces||0).toLocaleString()}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Shipping/wk</div><div className="font-bold text-emerald-600">{m.shipping||0}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">Overdue</div><div className="font-bold text-rose-600">{m.overdue||0}</div></div>
+            <div className="border rounded p-2"><div className="text-[9px] uppercase text-slate-400">On-time</div><div className="font-bold">{m.onTimeRate==null?'—':Math.round(m.onTimeRate*100)+'%'}</div></div>
+          </div>
+          <div className="font-bold mb-1">Health checks</div>
+          <table className="w-full border-collapse mb-3"><tbody>{(report.checks||[]).map((c,i)=>(<tr key={i} className="border-b"><td className="py-1 pr-2 w-6">{c.status==='pass'?'✓':c.status==='fail'?'✕':'–'}</td><td className="py-1 font-medium">{c.label}</td><td className="py-1 text-slate-500 text-right">{c.detail}</td></tr>))}</tbody></table>
+          <div className="font-bold mb-1 mt-3">Needs attention ({(report.flags||[]).length})</div>
+          {(report.flags||[]).length===0 ? <div className="text-slate-500">None.</div> :
+          <table className="w-full border-collapse mb-3"><tbody>{(report.flags||[]).map((f,i)=>(<tr key={i} className="border-b"><td className="py-1 pr-2 align-top w-14"><span className="uppercase text-[9px] font-bold">{sev(f.severity).label}</span></td><td className="py-1 font-medium align-top w-44">{f.title}</td><td className="py-1 text-slate-600">{f.detail}</td></tr>))}</tbody></table>}
+          {(report.stageLoad||[]).length>0 && <><div className="font-bold mb-1 mt-3">Stage load</div><table className="w-full border-collapse"><tbody>{(report.stageLoad||[]).map((s,i)=>(<tr key={i} className="border-b"><td className="py-1 font-medium">{s.label}</td><td className="py-1 text-right">{s.count} jobs · {Number(s.pieces||0).toLocaleString()} pcs · avg {s.avgAge}d</td></tr>))}</tbody></table></>}
+          <div className="text-[10px] text-slate-400 border-t pt-2 mt-4">Generated by the AI Production Manager (rule-based). Verify each flag against the job before acting.</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function GeneralLedgerView({ profile, journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }){
   const postings = useMemo(()=> buildGLPostings({ journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns }), [journalEntries, vouchers, expenses, bankTransactions, soPayments, bankAccounts, chartAccounts, cashAdvances, salesOrders, rfps, otherCollections, supplierReturns]);
   const years = finReportYears(postings);
@@ -57423,6 +57665,7 @@ function App(){
   const [auditOpenBudgetId,setAuditOpenBudgetId]=useState(null); // deep-link a budget request from an audit flag
   const [auditOpenCheckId,setAuditOpenCheckId]=useState(null);   // deep-link a check from an audit flag
   const [auditOpenPoId,setAuditOpenPoId]=useState(null);         // deep-link a PO from a purchasing-audit flag
+  const [prodOpenJobId,setProdOpenJobId]=useState(null);         // deep-link a production job from an AI Production Manager flag
   // Open the exact record behind an AI-Auditor flag, not just its list page.
   function openAuditFlag(f){
     if(!f) return;
@@ -57876,7 +58119,7 @@ function App(){
       // visibility; money-write/banking/approval views are gated inside each view.
       allowed = new Set(['ops-command','agm-approvals','scorecard','sales-analyst','checkin','toolbox','goals','inbox','my-tasks','profile',
         'pipeline','sales-tickets','client-orders','techpacks','clients','transmittals','team','pricing','sales-resources','marketing-expenses',
-        'prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
+        'prod-manager','prod','replacements','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','pattern','cutting','fabric-calc','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','subcon','subcon-sewing','subcon-cutting','subli-cutting','inhouse-sewing',
         'inventory','pur-home','purchasing-auditor','requests','queue','orders','supplier-returns','stock-out','stock-movements','suppliers','pur-resources','materials-library',
         'sales-orders','invoices','ledger','commissions','cash-position','cash-flow','fin-reports','ai-auditor','budgets','estimates','petty-cash','cash-advances','other-collections','rfps','expense-log',
         'hr-home','employees','hr-salary','hr-orgchart','hr-reviews','hr-relations','hr-engagements','hr-memos','hr-leave','hr-requests','hr-loans','gov-loans','hr-recruit','hr-templates',
@@ -57888,16 +58131,16 @@ function App(){
       // own orders only) so they can log Pending payments from the field.
       // Plus commissions so they can see their own commission ledger.
       // Lands on their personal Home (Workbench) by default.
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources','materials-library','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','transmittals','delivery-receipts','prod-manager','prod','sampling','graphic','printing','embroidery','knitting','logistics','budgets','sales-orders','commissions','sales-resources','materials-library','pricing']);
       fallback = 'rep-home';
     } else if(profile.role==='sales_representative'){
       // Sales Representative — same access as Sales Manager, plus their own
       // Home (Workbench) which is their default landing page.
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod-manager','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
       fallback = 'rep-home';
     } else if(isManagerRole(profile.role)){
       // Sales Manager — identical access, lands on their Home (Workbench).
-      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
+      allowed = new Set(['rep-home','inbox','my-tasks','pipeline','sales-tickets','client-orders','techpacks','clients','profile','team','transmittals','delivery-receipts','prod-manager','prod','sampling','graphic','printing','embroidery','knitting','logistics','sales-orders','invoices','ledger','commissions','budgets','sales-resources','materials-library','marketing','pricing']);
       fallback = 'rep-home';
     } else if(profile.role==='pattern_maker'){
       allowed = new Set(['pattern','fabric-calc','inbox','my-tasks','profile','prod','sampling']);
@@ -57932,17 +58175,17 @@ function App(){
     } else if(profile.role==='packing_head'){
       allowed = new Set(['inbox','my-tasks','packing','prod','profile']); fallback = 'packing';
     } else if(profile.role==='production'){
-      allowed = new Set(['inbox','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting','subli-cutting']);
+      allowed = new Set(['inbox','prod-manager','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','logistics','delivery-receipts','budgets','profile','subcon-sewing','subcon-cutting','subli-cutting']);
       fallback = 'prod';
       // (QC list is visible to production floor for reference; QC role owns edits.)
     } else if(profile.role==='production_supervisor'){
       // Production Supervisor — owns the production floor + sees techpacks,
       // logistics, payroll. Default landing is her custom Production Home.
-      allowed = new Set(['inbox','my-tasks','prod-home','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','inhouse-sewing','budgets','profile','subcon','subcon-sewing','subcon-cutting','subli-cutting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
+      allowed = new Set(['inbox','my-tasks','prod-home','prod-manager','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','techpacks','logistics','delivery-receipts','payroll','inhouse-sewing','budgets','profile','subcon','subcon-sewing','subcon-cutting','subli-cutting','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing']);
       fallback = 'prod-home';
     } else if(profile.role==='production_assistant'){
       // Production Assistant — production boards + the Replacement Requests queue (view).
-      allowed = new Set(['inbox','my-tasks','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile','subcon-sewing','subcon-cutting','subli-cutting']);
+      allowed = new Set(['inbox','my-tasks','prod-manager','prod','pattern','cutting','fabric-calc','qc','sampling','graphic','printing','embroidery','knitting','sewing','packing','replacements','trad-sorting','subli-sorting','dtf-pressing','subli-pressing','profile','subcon-sewing','subcon-cutting','subli-cutting']);
       fallback = 'prod';
     } else if(profile.role==='graphic'){
       allowed = new Set(['inbox','my-tasks','prod','sampling','graphic','printing','embroidery','knitting','budgets','profile']);
@@ -58636,7 +58879,7 @@ function App(){
       { items:[ ['ops-command','Command Center','🧭'], ['agm-approvals','For Approval','📬'], ['inbox','Inbox','📥'] ] },
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['sales-analyst','AI Sales Analyst','📈'], ['checkin','Daily Check-in','📝'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod-manager','AI Production Manager','🏭'], ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['qc','Quality Control','🔍'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['pattern','Pattern','✂'], ['cutting','In House Cutting','🔪'], ['trad-sorting','Trad Sorting','🧺'], ['subli-sorting','Subli Sorting','🧺'], ['dtf-pressing','DTF Pressing','🔥'], ['subli-pressing','Subli Pressing','🔥'], ['fabric-calc','Fabric Calculator','📐'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['purchasing-auditor','AI Auditor','🛠'],['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-movements','Stock Movements','📦'], ['suppliers','Suppliers','⚒'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       { group:'Finance (view)', items:[ ['sales-orders','Sales Orders','📜'], ['invoices','Invoices','🧾'], ['ledger','Accounts Receivable','📇'], ['commissions','Commissions','💰'], ['cash-position','Cash Position','💎'], ['cash-flow','Cash Flow','📈'], ['fin-reports','Financial Reports','📈'], ['budgets','Budget Requests','💰'], ['petty-cash','Petty Cash','💵'], ['cash-advances','Cash Advances','🧾'], ['rfps','Request for Payment','📝'], ['expense-log','Expense Log','📚'] ] },
@@ -58743,7 +58986,7 @@ function App(){
     // She runs the floor so she needs visibility across every production sub-board.
     NAV = [
       { items:[ ['prod-home','Home','🏭'], ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod-manager','AI Production Manager','🏭'], ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Sales', items:[ ['techpacks','Techpacks','📋'] ] },
       LOGISTICS_GROUP,
       { group:'Payroll', items:[ ['payroll','Sewing Payroll (old)','✂'] ] },
@@ -58754,14 +58997,14 @@ function App(){
     // Production Assistant — production boards + the Replacement Requests queue (view-only).
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod-manager','AI Production Manager','🏭'], ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       PERSONAL_GROUP,
     ];
   } else if(isProduction){
     // Production team — full production space + Logistics + Budget Requests.
     NAV = [
       { items:[ ['inbox','Inbox','📥'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod-manager','AI Production Manager','🏭'], ['prod','Production Board','⚙'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -58850,7 +59093,7 @@ function App(){
     NAV = [
       { items: [ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['pr-request','Request for Purchasing','🛒'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod-manager','AI Production Manager','🏭'], ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_DEPT_ONLY,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -58868,7 +59111,7 @@ function App(){
       { items:[ ['rep-home','Home','🏠'], ['inbox','Inbox','📥'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
+      { group:'Production', items:[ ['prod-manager','AI Production Manager','🏭'], ['prod','Production Board','⚙'], ['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'] ] },
       FINANCE_SALES,
       LOGISTICS_GROUP,
       PERSONAL_GROUP,
@@ -58882,7 +59125,7 @@ function App(){
       { group:'Executive', items:[ ['scorecard','Management Scorecard','📊'], ['sales-analyst','AI Sales Analyst','📈'], ['toolbox','Toolbox Meetings','🧰'], ['goals','Vision & Goals','🎯'], ['sourcing','Sourcing Trips','🧳'] ] },
       { group:'Sales', items:[ ['pipeline','Sales Pipeline','🧭'], ['sales-tickets','Sales Tickets','🎫'], ['client-orders','Client Orders','📦'], ['techpacks','Techpacks','📋'], ['clients','Clients','👥'], ['transmittals','Transmittals','📤'], ['team','Team Overview','🏢'], ['marketing-expenses','Marketing & Internal Expenses','🎁'], ['pricing','Pricing','💰'], ['sales-resources','Resources','📚'], ['materials-library','Materials Library','🧵'], ['costing','Costing Calculator','🧮'], ['pr-request','Request for Purchasing','🛒'] ] },
       { group:'Marketing', items:[ ['marketing','Marketing','📣'] ] },
-      { group:'Production', items:[ ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
+      { group:'Production', items:[ ['prod-manager','AI Production Manager','🏭'], ['prod','Production Board','⚙'], ['replacements','Replacement Requests','🔁'], ['pattern','Pattern','✂'],['cutting','In House Cutting','🔪'],['fabric-calc','Fabric Calculator','📐'],['trad-sorting','Trad Sorting','🧺'],['subli-sorting','Subli Sorting','🧺'],['dtf-pressing','DTF Pressing','🔥'],['subli-pressing','Subli Pressing','🔥'],['qc','Quality Control','🔍'],['sampling','Sampling Board','🧵'], ['graphic','Graphic Design','🎨'], ['printing','Printing','🖨'], ['embroidery','Embroidery','🪡'], ['knitting','Knitting','🧶'], ['sewing','Sewing','🧵'], ['inhouse-sewing','In-House Sewing Payroll','🧵'], ['packing','Packing','📦'], ['subcon-sewing','Subcon Sewing','🧷'], ['subcon-cutting','Subcon Cutting','🔪'], ['subli-cutting','Subli Cutting','🔪'] ] },
       { group:'Operations', items:[ ['inventory','Inventory','📦'] ] },
       { group:'Purchasing', items:[ ['pur-home','Home','🛒'], ['purchasing-auditor','AI Auditor','🛠'],['suppliers','Suppliers','⚒'], ['requests','Purchase Requests','📝'], ['queue','Materials Queue','📥'], ['orders','Purchase Orders','🧾'], ['supplier-returns','Returns to Supplier','↩'],['pur-cash-advance','Cash Advance','💵'], ['stock-out','Stock Out','📤'], ['stock-movements','Stock Movements','📦'], ['fabric-calc','Fabric Calculator','📐'], ['pur-resources','Resources','📚'], ['materials-library','Materials Library','🧵'] ] },
       FINANCE_FULL,
@@ -59095,7 +59338,8 @@ function App(){
         {view==='marketing-expenses' && <MarketingExpensesReport profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={setDetailLead} />}
         {view==='sales-tickets' && <SalesTicketQueue profile={profile} profiles={profiles} leads={leads} clients={clients} onOpenLead={(l)=>setDetailLead(l)} />}
         {view==='settings' && profile.role==='admin' && <SettingsView profile={profile} profiles={profiles} pendingInvites={pendingInvites} reload={loadAll} />}
-        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','cutting_dept','pattern_maker','qc','qc_personnel'].includes(profile.role)} />}
+        {view==='prod' && <ProductionBoard profile={profile} profiles={profiles} jobs={prodJobs} leads={leads} items={items} requests={requests} orders={orders} activityCounts={deptActivityCounts} reload={loadAll} openActivity={openDeptActivity} openTechpack={openTechpackView} onCreateDR={(ctx)=>setDrCreateCtx(ctx||{})} subcons={subcons} readOnly={['packing_head','trad_sorting_head','subli_sorting_head','dtf_pressing_head','subli_pressing_head','cutting_dept','pattern_maker','qc','qc_personnel'].includes(profile.role)} openId={prodOpenJobId} onOpenConsumed={()=>setProdOpenJobId(null)} />}
+        {view==='prod-manager' && <ProductionManagerView profile={profile} profiles={profiles} prodJobs={prodJobs} leads={leads} clients={clients} requests={requests} orders={orders} reload={loadAll} navTo={navTo} onOpenJob={(j)=>{ setProdOpenJobId(j.id); setView('prod'); }} />}
         {view==='subcon-sewing' && <SubconSewingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} subconSends={subconSends} subconReturns={subconReturns} subconProjects={subconProjects} subconPayrolls={subconPayrolls} subconPayrollItems={subconPayrollItems} rfps={rfps} reload={loadAll} />}
         {view==='subcon-cutting' && <SubconCuttingView profile={profile} profiles={profiles} subcons={subcons} leads={leads} clients={clients} prodJobs={prodJobs} requests={requests} orders={orders} rfps={rfps} reload={loadAll} />}
         {view==='subli-cutting' && <SubliCuttingView profile={profile} profiles={profiles} leads={leads} clients={clients} prodJobs={prodJobs} rfps={rfps} reload={loadAll} />}
